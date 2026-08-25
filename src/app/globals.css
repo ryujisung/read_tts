@@ -1,26 +1,108 @@
 @import "tailwindcss";
 
+/* 무대 톤 — 어두운 바탕에 앰버 포인트. 내 배역은 파랑으로 구분한다. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg: #0b0b0f;
+  --surface: #15151c;
+  --surface-2: #1d1d26;
+  --line: #2a2a36;
+  --fg: #f3f1ec;
+  --muted: #9a98a6;
+  --accent: #f2b544;
+  --accent-fg: #1a1200;
+  --me: #7cc4ff;
+  --danger: #ff6b6b;
+  --app-min-h: 100svh;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-me: var(--me);
+  --color-danger: var(--danger);
+  --font-sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui,
+    "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  color-scheme: dark;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  min-height: var(--app-min-h);
+  overscroll-behavior-y: none;
+}
+
+/* 폰이 기본, 데스크톱은 가운데 좁은 셸 */
+.shell {
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: var(--app-min-h);
+  display: flex;
+  flex-direction: column;
+  padding-left: max(1.25rem, env(safe-area-inset-left));
+  padding-right: max(1.25rem, env(safe-area-inset-right));
+  padding-top: max(1rem, env(safe-area-inset-top));
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+
+@media (min-width: 640px) {
+  body {
+    background:
+      radial-gradient(60% 40% at 50% 0%, rgba(242, 181, 68, 0.08), transparent 70%),
+      var(--bg);
+  }
+  .shell {
+    border-left: 1px solid var(--line);
+    border-right: 1px solid var(--line);
+  }
+}
+
+/* 대본 텍스트: 사용자 글자는 임의라 시스템 한글 글꼴로 떨어뜨린다 */
+.script-text {
+  font-family: "Pretendard Variable", Pretendard, "Apple SD Gothic Neo", "Noto Sans KR", system-ui,
+    sans-serif;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 rgba(124, 196, 255, 0.45); }
+  100% { box-shadow: 0 0 0 14px rgba(124, 196, 255, 0); }
+}
+.pulse-me {
+  animation: pulse-ring 1.4s ease-out infinite;
+}
+
+@keyframes speaking-bar {
+  0%, 100% { transform: scaleY(0.4); }
+  50% { transform: scaleY(1); }
+}
+.bar {
+  display: inline-block;
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--accent);
+  transform-origin: bottom;
+  animation: speaking-bar 0.9s ease-in-out infinite;
+}
+.bar:nth-child(2) { animation-delay: 0.15s; }
+.bar:nth-child(3) { animation-delay: 0.3s; }
+.bar:nth-child(4) { animation-delay: 0.45s; }
+
+.blur-line {
+  filter: blur(7px);
+  user-select: none;
 }

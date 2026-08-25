@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // pdf.js 워커 사본 — 우리 코드가 아니다
+    "public/**",
   ]),
 ]);
 

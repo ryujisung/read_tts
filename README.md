@@ -1,36 +1,28 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# rehearsal-web — 상대역 리허설
 
-## Getting Started
+대본을 넣고 내 배역을 고르면, 나머지 배역의 대사를 기기 음성이 읽어 주고 내 차례엔 멈춰서 기다린다.
+혼자 대본 연습용. 모바일 웹 우선, 최종 목표는 앱.
 
-First, run the development server:
+설계는 [docs/SPEC.md](docs/SPEC.md).
+
+## 실행
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm install
+pnpm dev          # http://localhost:3000
+pnpm test         # vitest — 파서·상태머신·침묵감지
+pnpm typecheck
+pnpm lint
+pnpm build
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 흐름
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+입력(붙여넣기·PDF·샘플) → 배역·범위·넘김 방식 → 리허설 → 완료
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 지키는 것
 
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- 대본은 브라우저 안(`sessionStorage`)에서만 다룬다. 서버로 보내지 않는다.
+- 상대 대사는 기기 내장 TTS(`speechSynthesis`). 유료 API는 쓰지 않는다.
+- 내 차례 넘김은 마이크 음량 기반 침묵 감지 + 수동 버튼. 소리를 저장·전송하지 않는다.
+- 연기를 평가·채점하지 않는다.
