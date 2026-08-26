@@ -3,6 +3,19 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   // 폰에서 LAN IP 로 dev 서버에 붙을 때 JS 청크가 cross-origin 으로 막힌다. 사설망 대역을 통째로 연다.
   allowedDevOrigins: ["10.*.*.*", "192.168.*.*", "172.16.*.*"],
+  // 교차 출처 격리 — SharedArrayBuffer 를 열어 onnxruntime wasm 을 멀티스레드로 돌린다.
+  // credentialless: 외부 CSS·폰트(jsdelivr)·모델(HF CDN)을 자격증명 없이 받으므로 CORP 헤더가 없어도 된다.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+          { key: "Cross-Origin-Embedder-Policy", value: "credentialless" },
+        ],
+      },
+    ];
+  },
   turbopack: {
     resolveAlias: {
       // hwp.js 는 파일 경로로도 읽을 수 있게 만들어져 `fs` 를 부른다.
