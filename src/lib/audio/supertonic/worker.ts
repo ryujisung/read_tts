@@ -67,8 +67,12 @@ const variantFor = (b: Backend): Variant => (b === "webgpu" ? "fp32" : "int8");
 
 async function doLoad(id: number, prefer?: Backend): Promise<void> {
   ort.env.wasm.wasmPaths = "/ort/";
-  // 교차 출처 격리를 켜지 않아 SharedArrayBuffer 가 없다. 스레드는 1개로 고정한다.
-  ort.env.wasm.numThreads = 1;
+  // 교차 출처 격리(COOP/COEP, next.config.ts headers)가 켜져 있으면 SharedArrayBuffer 가 있어
+  // wasm 을 여러 스레드로 돌릴 수 있다. 폰에서 스레드 1개는 RTF 2.5 라 끊긴다.
+  // 격리가 안 된 환경(격리 미지원 브라우저 등)에서는 1개로 떨어진다.
+  const isolated = typeof SharedArrayBuffer !== "undefined" && (self as unknown as { crossOriginIsolated?: boolean }).crossOriginIsolated === true;
+  const cores = typeof navigator !== "undefined" ? navigator.hardwareConcurrency || 2 : 2;
+  ort.env.wasm.numThreads = isolated ? Math.max(1, Math.min(4, cores - 1)) : 1;
 
   const backend = await pickBackend(prefer);
   const variant = variantFor(backend);

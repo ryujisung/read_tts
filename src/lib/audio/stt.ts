@@ -13,7 +13,7 @@ interface SpeechRecognitionLike {
   interimResults: boolean;
   continuous: boolean;
   maxAlternatives: number;
-  onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+  onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal?: boolean }> }) => void) | null;
   onerror: ((e: { error?: string }) => void) | null;
   onend: (() => void) | null;
   onstart: (() => void) | null;
@@ -30,6 +30,33 @@ function ctor(): RecognitionCtor | null {
 
 export function sttAvailable(): boolean {
   return ctor() !== null;
+}
+
+const squash = (s: string) => s.replace(/\s+/g, "");
+
+/**
+ * 인식 결과 항목들을 한 문장으로 합친다.
+ *
+ * 데스크톱 크롬은 항목이 이어지는 조각("너 맨날", "그러잖아")이라 붙이면 되지만,
+ * 안드로이드 크롬은 확정·중간 가리지 않고 항목마다 처음부터의 누적("너", "너 맨날",
+ * "너 맨날 그러잖아")을 준다. 이걸 붙이면 "너 너맨날 너맨날그러잖아"가 된다.
+ *
+ * 그래서 항목을 차례로 보며, 지금까지 합친 것이 새 항목의 앞부분이면 새 항목으로 갈아 끼우고
+ * (누적), 새 항목이 지금까지 것의 앞부분이면 버리고, 둘 다 아니면 이어 붙인다(조각).
+ * 띄어쓰기는 항목마다 달라질 수 있어 비교할 때만 뺀다.
+ */
+export function mergeTranscripts(parts: string[]): string {
+  let acc = "";
+  for (const raw of parts) {
+    const t = raw.trim();
+    if (!t) continue;
+    const a = squash(acc);
+    const b = squash(t);
+    if (!a || b.startsWith(a)) acc = t;
+    else if (a.startsWith(b)) continue;
+    else acc = `${acc} ${t}`;
+  }
+  return acc.trim();
 }
 
 export interface Listening {
@@ -78,8 +105,12 @@ export function startRecognition(cb: SttCallbacks, continuous = true): Listening
     cb.onStart?.();
   };
   r.onresult = (e) => {
-    let s = "";
-    for (let i = 0; i < e.results.length; i++) s += e.results[i][0].transcript;
+    const parts: string[] = [];
+    for (let i = 0; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript.trim();
+      if (t) parts.push(t);
+    }
+    const s = mergeTranscripts(parts);
     text = s;
     cb.onInterim?.(s);
   };

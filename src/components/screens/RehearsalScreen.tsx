@@ -141,8 +141,8 @@ export function RehearsalScreen({ script, setup, onFinish, onExit }: { script: S
       </p>
       {micError && <p className="text-[12px] text-red text-center">{micError}</p>}
       {idle ? (
-        <Button size="lg" className="w-full md:w-[340px]" onClick={() => { markStart(); void runner.start(); }}>
-          시작
+        <Button size="lg" className="w-full md:w-[340px]" disabled={runner.preparing} onClick={() => { markStart(); void runner.start(); }}>
+          {runner.preparing ? "상대 목소리 준비 중…" : "시작"}
         </Button>
       ) : (
         <div className="flex gap-2 w-full md:w-auto">

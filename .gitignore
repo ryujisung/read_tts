@@ -45,3 +45,4 @@ next-env.d.ts
 
 # 조사·실험용 임시 파일
 /.scratch
+certificates/
