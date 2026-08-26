@@ -13,7 +13,7 @@ interface SpeechRecognitionLike {
   interimResults: boolean;
   continuous: boolean;
   maxAlternatives: number;
-  onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+  onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal?: boolean }> }) => void) | null;
   onerror: ((e: { error?: string }) => void) | null;
   onend: (() => void) | null;
   onstart: (() => void) | null;
@@ -78,8 +78,19 @@ export function startRecognition(cb: SttCallbacks, continuous = true): Listening
     cb.onStart?.();
   };
   r.onresult = (e) => {
-    let s = "";
-    for (let i = 0; i < e.results.length; i++) s += e.results[i][0].transcript;
+    // 안드로이드 크롬은 중간 결과를 "너" → "너 맨날" → "너 맨날 그러잖아"처럼 누적된 항목으로
+    // 여러 개 보낸다. 전부 이어 붙이면 "너 너맨날 너맨날그러잖아"가 된다.
+    // 확정(isFinal)된 것만 이어 붙이고, 확정이 하나도 없으면 마지막 항목 하나만 쓴다.
+    const finals: string[] = [];
+    let last = "";
+    for (let i = 0; i < e.results.length; i++) {
+      const res = e.results[i];
+      const t = res[0].transcript.trim();
+      if (!t) continue;
+      last = t;
+      if (res.isFinal) finals.push(t);
+    }
+    const s = finals.length ? finals.join(" ") : last;
     text = s;
     cb.onInterim?.(s);
   };

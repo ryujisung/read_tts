@@ -236,4 +236,54 @@ export async function prefetch(text: string, voice: RoleVoice): Promise<void> {
   });
 }
 
+// ─── 앞으로 나올 대사를 순서대로 미리 만들어 두는 큐 ───────────────────────
+//
+// 느린 기기(WebGPU 없는 폰)는 합성이 재생보다 오래 걸린다(RTF > 1). 한 줄만 미리 만들면
+// 내 차례가 짧을 때 따라잡지 못해 상대 대사 앞에 침묵이 생긴다. 그래서 앞의 몇 줄을
+// 한 번에 하나씩 순서대로 만들어 둔다. 한 번에 하나만 돌리므로 지금 당장 필요한 줄의
+// 합성은 길어야 한 줄만 기다린다. 만든 결과는 엔진 캐시에 남는다.
+
+interface PrefetchItem {
+  text: string;
+  voice: RoleVoice;
+}
+
+let prefetchQueue: PrefetchItem[] = [];
+let prefetchRunning = false;
+let prefetchPaused = false;
+
+async function runPrefetch(): Promise<void> {
+  if (prefetchRunning) return;
+  prefetchRunning = true;
+  try {
+    while (prefetchQueue.length > 0 && !prefetchPaused && engine === "supertonic") {
+      const item = prefetchQueue.shift()!;
+      const body = speakableText(item.text);
+      if (!body) continue;
+      await synthesize(body, item.voice.preset).catch(() => {
+        // 미리 만드는 것뿐이라 실패는 넘어간다. speak 이 다시 시도한다.
+      });
+    }
+  } finally {
+    prefetchRunning = false;
+  }
+}
+
+/** 앞으로 나올 상대 대사들을 순서대로 등록한다. 이미 만든 것은 캐시가 바로 돌려주므로 비용이 없다. */
+export function queuePrefetch(items: PrefetchItem[]): void {
+  if (engine !== "supertonic") return;
+  prefetchQueue = items.slice();
+  void runPrefetch();
+}
+
+/** 상대가 읽는 동안에는 멈춘다 — 합성과 재생이 자원을 다투면 소리가 끊긴다. */
+export function setPrefetchPaused(paused: boolean): void {
+  prefetchPaused = paused;
+  if (!paused) void runPrefetch();
+}
+
+export function clearPrefetch(): void {
+  prefetchQueue = [];
+}
+
 export { VOICE_PRESETS, type VoicePreset };

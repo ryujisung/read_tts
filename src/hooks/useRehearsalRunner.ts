@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { startListening, type MicListener } from "../lib/audio/mic";
-import { cancelSpeech, prefetch, speak, unlockTts, type RoleVoice } from "../lib/audio/tts";
+import { cancelSpeech, clearPrefetch, prefetch, queuePrefetch, setPrefetchPaused, speak, unlockTts, type RoleVoice } from "../lib/audio/tts";
 import { DEFAULT_VAD } from "../lib/audio/vad";
 import {
   advance,
@@ -30,6 +30,12 @@ export interface RunnerOptions {
 }
 
 const GAP_BEFORE_AI_MS = 350;
+/** 미리 만들어 둘 상대 대사 수. 캐시(24줄)를 넘지 않게 잡는다. */
+const PREFETCH_AHEAD = 6;
+/** 시작 전에 기다려서 만들어 두는 상대 대사 수 — 첫 대사부터 끊기지 않게 */
+const WARMUP_LINES = 2;
+/** 워밍업을 이보다 오래 기다리지는 않는다 — 아주 느린 기기에서 시작 버튼이 죽은 듯 보이면 안 된다 */
+const WARMUP_TIMEOUT_MS = 25000;
 const GAP_BEFORE_MIC_MS = 250;
 
 function delay(ms: number, signal: AbortSignal) {
@@ -67,14 +73,21 @@ export function useRehearsalRunner(cfg: RehearsalConfig, opts: RunnerOptions) {
   //
   // 내 차례에만 한다. 상대가 읽는 동안에 돌리면 합성과 재생이 같은 자원을 다투어
   // 소리가 끊긴다. 내 차례는 어차피 기다리는 시간이라 여기서 하는 편이 맞다.
+  //
+  // 느린 기기는 한 줄 합성이 재생보다 오래 걸려서(RTF > 1) 한 줄만 미리 만들면 못 따라잡는다.
+  // 앞의 몇 줄을 순서대로 큐에 넣어 두고, 상대가 읽는 동안에는 큐를 멈춘다.
   useEffect(() => {
-    if (state.status !== "me") return;
+    if (state.status === "idle" || state.status === "done") return;
     const upcoming = state.lines
-      .slice(state.index + 1)
-      .find((l): l is DialogueLine => l.type === "dialogue" && l.role !== state.myRole);
-    if (!upcoming) return;
-    void prefetch(upcoming.text, styleForRef.current(upcoming.role));
+      .slice(state.index + 1, state.end + 1)
+      .filter((l): l is DialogueLine => l.type === "dialogue" && l.role !== state.myRole)
+      .slice(0, PREFETCH_AHEAD)
+      .map((l) => ({ text: l.text, voice: styleForRef.current(l.role) }));
+    queuePrefetch(upcoming);
+    setPrefetchPaused(state.status === "ai");
   }, [state]);
+
+  useEffect(() => () => clearPrefetch(), []);
 
   useEffect(() => {
     cleanup();
@@ -120,6 +133,12 @@ export function useRehearsalRunner(cfg: RehearsalConfig, opts: RunnerOptions) {
     return cleanup;
   }, [state, myTurn, cleanup]);
 
+  const [preparing, setPreparing] = useState(false);
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  });
+
   const start = useCallback(async () => {
     unlockTts();
     if (myTurn === "silence") {
@@ -130,6 +149,21 @@ export function useRehearsalRunner(cfg: RehearsalConfig, opts: RunnerOptions) {
         setMicError("마이크 권한이 없어서 버튼으로 넘기는 방식으로 진행해요.");
         setMyTurn("manual");
       }
+    }
+    // 첫 상대 대사 몇 줄은 만들어 두고 시작한다. 느린 기기에서 첫 줄부터 끊기지 않게.
+    setPreparing(true);
+    try {
+      const s = stateRef.current;
+      const firstLines = s.lines
+        .slice(s.index, s.end + 1)
+        .filter((l): l is DialogueLine => l.type === "dialogue" && l.role !== s.myRole)
+        .slice(0, WARMUP_LINES);
+      const warm = (async () => {
+        for (const l of firstLines) await prefetch(l.text, styleForRef.current(l.role));
+      })();
+      await Promise.race([warm, new Promise<void>((r) => setTimeout(r, WARMUP_TIMEOUT_MS))]);
+    } finally {
+      setPreparing(false);
     }
     setState((s) => begin(s));
   }, [myTurn]);
@@ -146,5 +180,5 @@ export function useRehearsalRunner(cfg: RehearsalConfig, opts: RunnerOptions) {
     cleanup();
   }, [cleanup]);
 
-  return { state, level, micError, myTurn, start, togglePause, next, stop };
+  return { state, level, micError, myTurn, preparing, start, togglePause, next, stop };
 }

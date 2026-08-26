@@ -208,8 +208,8 @@ export function QuizScreen({ script, setup, onFinish, onExit }: { script: Stored
   const controls = idle ? (
     <div className="flex flex-col items-center gap-2.5">
       <p className="text-[12.5px] text-ink-4">내 차례엔 대사가 가려지고 마이크가 켜져요. 말하면 알아서 맞춰봐요.</p>
-      <Button size="lg" className="w-full md:w-[340px]" onClick={() => { markStart(); void runner.start(); }}>
-        시작
+      <Button size="lg" className="w-full md:w-[340px]" disabled={runner.preparing} onClick={() => { markStart(); void runner.start(); }}>
+        {runner.preparing ? "상대 목소리 준비 중…" : "시작"}
       </Button>
     </div>
   ) : isMe ? (
