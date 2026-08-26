@@ -1,198 +1,175 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRehearsalRunner } from "../../hooks/useRehearsalRunner";
 import { ROLE_VOICE_PALETTE } from "../../lib/audio/tts";
-import { progress, window as rehearsalWindow } from "../../lib/rehearsal/machine";
+import { progress, window as rehearsalWindow, type RehearsalState } from "../../lib/rehearsal/machine";
+import type { DialogueLine } from "../../lib/script/parse";
 import type { Setup, StoredScript } from "../../lib/storage";
-import { Button } from "../ui";
+import { fmtClock, Page } from "../Page";
+import { ReviewList } from "../ReviewList";
+import { Button, Icon, RoleName, StatusPill } from "../ui";
 import type { RunStats } from "./DoneScreen";
 
-function fmt(ms: number) {
-  const s = Math.floor(ms / 1000);
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+export function useStyleFor(script: StoredScript, myRole: string) {
+  const others = useMemo(() => script.roles.filter((r) => r !== myRole), [script.roles, myRole]);
+  return (role: string) => ROLE_VOICE_PALETTE[Math.max(0, others.indexOf(role)) % ROLE_VOICE_PALETTE.length];
 }
 
-export function RehearsalScreen({
-  script,
-  setup,
-  onFinish,
-  onExit,
-}: {
-  script: StoredScript;
-  setup: Setup;
-  onFinish: (stats: RunStats) => void;
-  onExit: () => void;
-}) {
-  const others = useMemo(() => script.roles.filter((r) => r !== setup.myRole), [script.roles, setup.myRole]);
-  const runner = useRehearsalRunner(
-    { lines: script.lines, myRole: setup.myRole, start: setup.start, end: setup.end },
-    {
-      advanceMode: setup.advanceMode,
-      styleFor: (role) => ROLE_VOICE_PALETTE[Math.max(0, others.indexOf(role)) % ROLE_VOICE_PALETTE.length],
-    },
-  );
-  const { state, level, micError, effectiveMode } = runner;
-  const w = rehearsalWindow(state);
-  const prog = progress(state);
-
-  // 가리기 해제는 줄 단위 — 다음 줄로 넘어가면 자동으로 다시 가려진다
-  const [revealedIndex, setRevealedIndex] = useState(-1);
-  const revealed = revealedIndex === state.index;
+export function useElapsed(state: RehearsalState) {
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
-  const stageRef = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
     if (startedAt === null || state.status === "done") return;
     const t = setInterval(() => setElapsed(Date.now() - startedAt), 1000);
     return () => clearInterval(t);
   }, [startedAt, state.status]);
+  return { elapsed, startedAt, markStart: () => setStartedAt(Date.now()) };
+}
 
-  useEffect(() => {
-    stageRef.current?.scrollTo({ top: stageRef.current.scrollHeight, behavior: "smooth" });
-  }, [state.index]);
+/** 리딩·암기 대조 공통 상단: 나가기 · 상태 알약 · 진행 */
+export function RunHeader({ onExit, pill, right, progressRatio }: { onExit: () => void; pill: React.ReactNode; right: string; progressRatio: number }) {
+  return (
+    <div className="bg-surface md:bg-transparent">
+      <div className="h-12 md:h-14 flex items-center justify-between px-4 md:px-5 md:border-b md:border-line-soft">
+        <button type="button" onClick={onExit} className="flex items-center gap-1 text-[13px] font-bold text-ink-3">
+          <Icon name="x" size={16} /> 나가기
+        </button>
+        {pill}
+        <span className="text-[12.5px] font-bold text-ink-4 tabular-nums">{right}</span>
+      </div>
+      <div className="px-4 md:hidden">
+        <div className="h-1 rounded-full bg-line overflow-hidden">
+          <div className="h-full bg-blue transition-[width] duration-500" style={{ width: `${progressRatio * 100}%` }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function PastLine({ line, myRole }: { line: DialogueLine; myRole: string }) {
+  return (
+    <p className="script-text flex gap-2 text-[13px] md:text-[14px] text-ink-4 leading-relaxed">
+      <span className={`shrink-0 font-extrabold ${line.role === myRole ? "text-me-soft" : "text-partner-soft"}`}>{line.role}</span>
+      {line.text}
+    </p>
+  );
+}
+
+export function RehearsalScreen({ script, setup, onFinish, onExit }: { script: StoredScript; setup: Setup; onFinish: (s: RunStats) => void; onExit: () => void }) {
+  const styleFor = useStyleFor(script, setup.myRole);
+  const runner = useRehearsalRunner(
+    { lines: script.lines, myRole: setup.myRole, start: setup.start, end: setup.end },
+    { myTurn: setup.advanceMode, styleFor },
+  );
+  const { state, level, micError, myTurn } = runner;
+  const w = rehearsalWindow(state);
+  const prog = progress(state);
+  const { elapsed, startedAt, markStart } = useElapsed(state);
 
   useEffect(() => {
     if (state.status !== "done") return;
-    onFinish({ elapsedMs: startedAt ? Date.now() - startedAt : 0, lineCount: prog.total });
-    // onFinish는 화면 전환만 하므로 의존성에서 뺀다
+    onFinish({ mode: "read", elapsedMs: startedAt ? Date.now() - startedAt : 0, lineCount: prog.total });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.status]);
 
   const isMe = state.status === "me";
   const isAi = state.status === "ai";
   const isPaused = state.status === "paused";
-  const running = state.status !== "idle" && state.status !== "done";
-  const hideNow = isMe && setup.hideMyLines && !revealed;
-  // 현재 줄 바로 앞 지문은 따로 보여 주므로 지난 줄 목록에서는 뺀다
-  const pastVisible = w.past.slice(0, w.past.length - w.leadingDirections.length).slice(-4);
+  const idle = state.status === "idle";
+  const pastDialogues = w.past.filter((l): l is DialogueLine => l.type === "dialogue").slice(-2);
+
+  const stage = (
+    <div className="flex flex-col gap-3 md:gap-3.5 w-full md:max-w-[640px]">
+      {pastDialogues.map((l, i) => (
+        <PastLine key={`${state.index}-${i}`} line={l} myRole={setup.myRole} />
+      ))}
+      {w.leadingDirections.map((d, i) => (
+        <p key={i} className="script-text text-[12.5px] md:text-[13px] italic text-ink-4">
+          {d}
+        </p>
+      ))}
+      {w.current && (
+        <div
+          className={`rounded-[20px] md:rounded-[22px] p-5 md:p-7 border shadow-[0_8px_24px_rgba(10,121,251,0.08)] ${
+            isMe ? "bg-blue-mist border-blue border-[1.5px]" : isPaused ? "bg-surface border-line" : "bg-surface border-blue-line"
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <span className={`text-[13px] md:text-[14px] font-black ${isMe ? "text-blue" : "text-partner"}`}>
+              {isMe ? `${w.current.role} · 내 차례` : w.current.role}
+            </span>
+            {isAi && (
+              <span className="flex items-end gap-[3px] h-4" aria-label="읽는 중">
+                <i className="bar" /><i className="bar" /><i className="bar" /><i className="bar" />
+              </span>
+            )}
+            {isMe && myTurn === "silence" && (
+              <span className="flex items-center gap-1.5 text-[12px] font-bold text-blue">
+                <span className="pulse-me w-2 h-2 rounded-full bg-blue" /> 듣고 있어요
+              </span>
+            )}
+          </div>
+          <p className="script-text mt-3 text-[23px] md:text-[30px] leading-[1.4] font-extrabold text-ink">{w.current.text}</p>
+          {isMe && myTurn === "silence" && (
+            <div className="mt-3.5 h-1 rounded-full bg-blue-line overflow-hidden">
+              <div className="h-full bg-blue transition-[width] duration-100" style={{ width: `${Math.min(100, level * 900)}%` }} />
+            </div>
+          )}
+        </div>
+      )}
+      {w.next && state.status !== "done" && (
+        <p className="script-text text-[12px] md:text-[13px] text-ink-5 truncate">
+          다음 · <RoleName role={w.next.role} me={w.next.role === setup.myRole} className="opacity-70" /> {w.next.text}
+        </p>
+      )}
+    </div>
+  );
+
+  const controls = (
+    <div className="flex flex-col items-center gap-2.5">
+      <p className="text-[12.5px] text-ink-4 text-center">
+        {idle && (myTurn === "silence" ? "시작하면 마이크 권한을 물어봐요" : "내 차례엔 다음을 눌러요")}
+        {isAi && "상대가 읽는 중 · 끝나면 내 차례"}
+        {isMe && (myTurn === "silence" ? "말이 끝나면 자동으로 넘어가요" : "다 말하면 다음을 눌러요")}
+        {isPaused && "일시정지"}
+      </p>
+      {micError && <p className="text-[12px] text-red text-center">{micError}</p>}
+      {idle ? (
+        <Button size="lg" className="w-full md:w-[340px]" onClick={() => { markStart(); void runner.start(); }}>
+          시작
+        </Button>
+      ) : (
+        <div className="flex gap-2 w-full md:w-auto">
+          <Button variant="secondary" className="flex-1 md:w-40" onClick={runner.togglePause}>
+            {isPaused ? "이어가기" : "일시정지"}
+          </Button>
+          <Button className="flex-1 md:w-40" onClick={runner.next}>
+            다음
+          </Button>
+        </div>
+      )}
+    </div>
+  );
 
   return (
-    <div className="shell !pb-3">
-      <header className="flex items-center justify-between h-10 -mx-1">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            runner.stop();
-            onExit();
-          }}
-        >
-          ✕ 나가기
-        </Button>
-        <span className="text-sm text-muted tabular-nums">
-          {prog.done} / {prog.total}
-        </span>
-        <span className="text-sm text-muted tabular-nums w-16 text-right">{fmt(elapsed)}</span>
-      </header>
-      <div className="h-1 rounded-full bg-line mt-1 overflow-hidden">
-        <div
-          className="h-full bg-accent transition-[width] duration-500"
-          style={{ width: `${prog.total ? (prog.done / prog.total) * 100 : 0}%` }}
-        />
-      </div>
-
-      <div ref={stageRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col justify-end gap-3 py-5">
-        {pastVisible.map((l, i) => (
-          <p key={`${state.index}-${i}`} className="script-text text-sm text-muted/70 leading-relaxed">
-            {l.type === "dialogue" ? (
-              <>
-                <span className={l.role === setup.myRole ? "text-me/60" : "text-accent/60"}>{l.role}</span>{" "}
-                {l.text}
-              </>
-            ) : (
-              <span className="italic">— {l.text}</span>
-            )}
-          </p>
-        ))}
-
-        {w.leadingDirections.map((d, i) => (
-          <p key={i} className="script-text text-sm italic text-muted">
-            — {d}
-          </p>
-        ))}
-
-        {w.current && (
-          <div
-            className={`rounded-3xl p-5 border transition-colors ${
-              isMe ? "bg-me/10 border-me/40" : isPaused ? "bg-surface border-line" : "bg-accent/10 border-accent/40"
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <span className={`text-sm font-semibold ${isMe ? "text-me" : "text-accent"}`}>
-                {isMe ? `${w.current.role} · 내 차례` : w.current.role}
-              </span>
-              {isAi && (
-                <span className="flex items-end gap-0.5 h-4" aria-label="읽는 중">
-                  <i className="bar" />
-                  <i className="bar" />
-                  <i className="bar" />
-                  <i className="bar" />
-                </span>
-              )}
-            </div>
-            <p
-              className={`script-text mt-3 text-[1.45rem] leading-[1.5] font-medium ${hideNow ? "blur-line" : ""}`}
-              onClick={() => hideNow && setRevealedIndex(state.index)}
-            >
-              {w.current.text}
-            </p>
-            {hideNow && (
-              <button type="button" onClick={() => setRevealedIndex(state.index)} className="mt-3 text-sm text-me underline underline-offset-4">
-                원문 보기
-              </button>
-            )}
-          </div>
-        )}
-
-        {w.next && state.status !== "done" && (
-          <p className="script-text text-sm text-muted/60 truncate">
-            다음 · <span className={w.next.role === setup.myRole ? "text-me/60" : ""}>{w.next.role}</span> {w.next.text}
-          </p>
-        )}
-      </div>
-
-      <footer className="pt-2">
-        <div className="h-8 flex items-center justify-center text-sm text-muted">
-          {state.status === "idle" && (effectiveMode === "silence" ? "시작하면 마이크 권한을 물어봐요" : "내 차례엔 넘기기를 눌러요")}
-          {isAi && "상대가 말하는 중"}
-          {isMe && effectiveMode === "silence" && (
-            <span className="flex items-center gap-2">
-              <span className="pulse-me inline-block w-2.5 h-2.5 rounded-full bg-me" />
-              듣고 있어요
-              <span className="inline-block w-16 h-1.5 rounded-full bg-line overflow-hidden">
-                <span className="block h-full bg-me" style={{ width: `${Math.min(100, level * 900)}%` }} />
-              </span>
-            </span>
-          )}
-          {isMe && effectiveMode === "manual" && "다 말하면 넘기기"}
-          {isPaused && "일시정지"}
+    <Page wide className="md:bg-surface">
+      <RunHeader
+        onExit={() => { runner.stop(); onExit(); }}
+        pill={<StatusPill label="리딩 중" />}
+        right={`${prog.done} / ${prog.total} · ${fmtClock(elapsed)}`}
+        progressRatio={prog.total ? prog.done / prog.total : 0}
+      />
+      <div className="flex-1 flex flex-col md:flex-row min-h-0">
+        <aside className="hidden md:block w-[380px] shrink-0 bg-gray-bg-2 border-r border-line-soft p-5 overflow-y-auto max-h-[calc(100svh-104px)]">
+          <p className="text-[13px] font-black text-ink-3 pb-2.5">대본 · {script.title ?? "대본"}</p>
+          <ReviewList lines={script.lines} myRole={setup.myRole} currentIndex={state.index} />
+        </aside>
+        <div className="flex-1 flex flex-col justify-end md:justify-center items-center gap-5 px-4 py-4 md:p-10">
+          {stage}
+          <div className="w-full md:max-w-[640px] pt-1 md:pt-3">{controls}</div>
         </div>
-        {micError && <p className="text-xs text-danger text-center mb-2">{micError}</p>}
-
-        {state.status === "idle" ? (
-          <Button
-            size="lg"
-            className="w-full"
-            onClick={() => {
-              setStartedAt(Date.now());
-              void runner.start();
-            }}
-          >
-            시작
-          </Button>
-        ) : (
-          <div className="flex gap-2">
-            <Button variant="secondary" className="flex-1" onClick={runner.togglePause} disabled={!running && !isPaused}>
-              {isPaused ? "이어가기" : "일시정지"}
-            </Button>
-            <Button className="flex-1" onClick={runner.next} disabled={state.status === "done"}>
-              넘기기
-            </Button>
-          </div>
-        )}
-      </footer>
-    </div>
+      </div>
+    </Page>
   );
 }

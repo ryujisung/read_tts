@@ -1,75 +1,82 @@
 @import "tailwindcss";
 
-/* 무대 톤 — 어두운 바탕에 앰버 포인트. 내 배역은 파랑으로 구분한다. */
+/* pen 시안(RN앱 반영.pen) 토큰 — 토스 톤 라이트 */
 :root {
-  --bg: #0b0b0f;
-  --surface: #15151c;
-  --surface-2: #1d1d26;
-  --line: #2a2a36;
-  --fg: #f3f1ec;
-  --muted: #9a98a6;
-  --accent: #f2b544;
-  --accent-fg: #1a1200;
-  --me: #7cc4ff;
-  --danger: #ff6b6b;
-  --app-min-h: 100svh;
+  --blue: #3182f6;
+  --blue-dark: #1b64da;
+  --blue-soft: #e8f3ff;
+  --blue-mist: #f8fbff;
+  --blue-line: #dce9ff;
+  --ink: #191f28;
+  --ink-strong: #333d4b;
+  --ink-sub: #4e5968;
+  --ink-3: #6b7684;
+  --ink-4: #8b95a1;
+  --ink-5: #b0b8c1;
+  --line: #e5e8eb;
+  --line-soft: #edf0f3;
+  --gray-bg: #f2f4f6;
+  --gray-bg-2: #f9fafb;
+  --surface: #ffffff;
+  --green: #009959;
+  --green-bg: #e5f8ef;
+  --warn: #8a4b00;
+  --warn-bg: #fff8ec;
+  --red: #e42939;
+  --navy: #0f1525;
+  --blue-light: #8fa5ff;
+  --muted: #9fb0c9;
+  --partner: #b45309;
+  --partner-soft: #d9a066;
+  --me-soft: #7fb0f5;
 }
 
 @theme inline {
-  --color-bg: var(--bg);
-  --color-surface: var(--surface);
-  --color-surface-2: var(--surface-2);
+  --color-blue: var(--blue);
+  --color-blue-dark: var(--blue-dark);
+  --color-blue-soft: var(--blue-soft);
+  --color-blue-mist: var(--blue-mist);
+  --color-blue-line: var(--blue-line);
+  --color-ink: var(--ink);
+  --color-ink-strong: var(--ink-strong);
+  --color-ink-sub: var(--ink-sub);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+  --color-ink-5: var(--ink-5);
   --color-line: var(--line);
-  --color-fg: var(--fg);
+  --color-line-soft: var(--line-soft);
+  --color-gray-bg: var(--gray-bg);
+  --color-gray-bg-2: var(--gray-bg-2);
+  --color-surface: var(--surface);
+  --color-green: var(--green);
+  --color-green-bg: var(--green-bg);
+  --color-warn: var(--warn);
+  --color-warn-bg: var(--warn-bg);
+  --color-red: var(--red);
+  --color-navy: var(--navy);
+  --color-blue-light: var(--blue-light);
   --color-muted: var(--muted);
-  --color-accent: var(--accent);
-  --color-accent-fg: var(--accent-fg);
-  --color-me: var(--me);
-  --color-danger: var(--danger);
+  --color-partner: var(--partner);
+  --color-partner-soft: var(--partner-soft);
+  --color-me-soft: var(--me-soft);
   --font-sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui,
     "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
 }
 
 html {
-  color-scheme: dark;
+  color-scheme: light;
   -webkit-text-size-adjust: 100%;
 }
 
 body {
-  background: var(--bg);
-  color: var(--fg);
+  background: var(--gray-bg-2);
+  color: var(--ink);
   font-family: var(--font-sans);
-  min-height: var(--app-min-h);
+  min-height: 100svh;
   overscroll-behavior-y: none;
 }
 
-/* 폰이 기본, 데스크톱은 가운데 좁은 셸 */
-.shell {
-  width: 100%;
-  max-width: 480px;
-  margin: 0 auto;
-  min-height: var(--app-min-h);
-  display: flex;
-  flex-direction: column;
-  padding-left: max(1.25rem, env(safe-area-inset-left));
-  padding-right: max(1.25rem, env(safe-area-inset-right));
-  padding-top: max(1rem, env(safe-area-inset-top));
-  padding-bottom: max(1rem, env(safe-area-inset-bottom));
-}
-
-@media (min-width: 640px) {
-  body {
-    background:
-      radial-gradient(60% 40% at 50% 0%, rgba(242, 181, 68, 0.08), transparent 70%),
-      var(--bg);
-  }
-  .shell {
-    border-left: 1px solid var(--line);
-    border-right: 1px solid var(--line);
-  }
-}
-
-/* 대본 텍스트: 사용자 글자는 임의라 시스템 한글 글꼴로 떨어뜨린다 */
+/* 사용자 대본 글자는 임의라 시스템 한글 글꼴로 떨어뜨린다 */
 .script-text {
   font-family: "Pretendard Variable", Pretendard, "Apple SD Gothic Neo", "Noto Sans KR", system-ui,
     sans-serif;
@@ -77,12 +84,10 @@ body {
   overflow-wrap: anywhere;
 }
 
-@keyframes pulse-ring {
-  0% { box-shadow: 0 0 0 0 rgba(124, 196, 255, 0.45); }
-  100% { box-shadow: 0 0 0 14px rgba(124, 196, 255, 0); }
-}
-.pulse-me {
-  animation: pulse-ring 1.4s ease-out infinite;
+.blur-line {
+  filter: blur(8px);
+  user-select: none;
+  pointer-events: none;
 }
 
 @keyframes speaking-bar {
@@ -92,9 +97,9 @@ body {
 .bar {
   display: inline-block;
   width: 3px;
-  height: 14px;
+  height: 16px;
   border-radius: 2px;
-  background: var(--accent);
+  background: var(--blue);
   transform-origin: bottom;
   animation: speaking-bar 0.9s ease-in-out infinite;
 }
@@ -102,7 +107,8 @@ body {
 .bar:nth-child(3) { animation-delay: 0.3s; }
 .bar:nth-child(4) { animation-delay: 0.45s; }
 
-.blur-line {
-  filter: blur(7px);
-  user-select: none;
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 rgba(49, 130, 246, 0.45); }
+  100% { box-shadow: 0 0 0 12px rgba(49, 130, 246, 0); }
 }
+.pulse-me { animation: pulse-ring 1.4s ease-out infinite; }

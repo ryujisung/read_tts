@@ -12,13 +12,14 @@ export interface StoredScript {
 }
 
 export type AdvanceMode = "silence" | "manual";
+export type Mode = "read" | "quiz";
 
 export interface Setup {
   myRole: string;
   start: number;
   end: number;
+  mode: Mode;
   advanceMode: AdvanceMode;
-  hideMyLines: boolean;
 }
 
 const SCRIPT_KEY = "rehearsal.script";

@@ -1,35 +1,30 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { getKoreanVoices, isRemoteOnly, ROLE_VOICE_PALETTE, speak, ttsSupported, unlockTts, waitForVoices } from "../../lib/audio/tts";
+import { useEffect, useState } from "react";
 import { micSupported } from "../../lib/audio/mic";
-import type { AdvanceMode, Setup, StoredScript } from "../../lib/storage";
-import { Button, Chip, Section, Segmented, Toggle } from "../ui";
-
-type Range = "all" | "part";
+import { sttAvailable } from "../../lib/audio/stt";
+import { isRemoteOnly, ROLE_VOICE_PALETTE, speak, ttsSupported, unlockTts, waitForVoices } from "../../lib/audio/tts";
+import type { AdvanceMode, Mode, Setup, StoredScript } from "../../lib/storage";
+import { Page } from "../Page";
+import { ReviewList } from "../ReviewList";
+import { Button, Card, CardTitle, Icon, SelectCard, StepsPill, TopBar } from "../ui";
 
 export function SetupScreen({
   script,
   initialSetup,
   onStart,
   onBack,
+  onReinput,
 }: {
   script: StoredScript;
   initialSetup: Setup | null;
   onStart: (setup: Setup) => void;
   onBack: () => void;
+  onReinput: () => void;
 }) {
-  const last = script.lines.length - 1;
   const [myRole, setMyRole] = useState(initialSetup?.myRole ?? script.roles[0]);
-  const [range, setRange] = useState<Range>(
-    initialSetup && (initialSetup.start > 0 || initialSetup.end < last) ? "part" : "all",
-  );
-  const [start, setStart] = useState(initialSetup?.start ?? 0);
-  const [end, setEnd] = useState(initialSetup?.end ?? last);
-  const [advanceMode, setAdvanceMode] = useState<AdvanceMode>(
-    initialSetup?.advanceMode ?? (micSupported() ? "silence" : "manual"),
-  );
-  const [hideMyLines, setHideMyLines] = useState(initialSetup?.hideMyLines ?? false);
+  const [mode, setMode] = useState<Mode>(initialSetup?.mode ?? "read");
+  const [advanceMode, setAdvanceMode] = useState<AdvanceMode>(initialSetup?.advanceMode ?? (micSupported() ? "silence" : "manual"));
   const [voiceNote, setVoiceNote] = useState<string | null>(() =>
     ttsSupported() ? null : "이 브라우저는 음성 읽기를 지원하지 않아요. 상대 대사는 화면으로만 보여요.",
   );
@@ -42,152 +37,112 @@ export function SetupScreen({
     });
   }, []);
 
-  const dialogueOptions = useMemo(
-    () =>
-      script.lines
-        .map((l, i) => ({ l, i }))
-        .filter(({ l }) => l.type === "dialogue")
-        .map(({ l, i }) => ({
-          index: i,
-          label: `${l.type === "dialogue" ? l.role : ""}: ${l.text.slice(0, 22)}${l.text.length > 22 ? "…" : ""}`,
-        })),
-    [script.lines],
-  );
-
   const others = script.roles.filter((r) => r !== myRole);
-  const rangeStart = range === "all" ? 0 : start;
-  const rangeEnd = range === "all" ? last : end;
-  const dialogueCount = script.lines.slice(rangeStart, rangeEnd + 1).filter((l) => l.type === "dialogue").length;
-  const rangeOk = rangeStart <= rangeEnd && dialogueCount > 0;
+  const dialogue = script.lines.filter((l) => l.type === "dialogue");
+  const count = (r: string) => dialogue.filter((l) => l.role === r).length;
 
-  function previewVoice(role: string) {
+  function previewVoice() {
     unlockTts();
-    const style = ROLE_VOICE_PALETTE[others.indexOf(role) % ROLE_VOICE_PALETTE.length];
-    void speak(`${role} 역이에요. 이런 목소리로 읽을게요.`, style);
+    others.forEach((r, i) => {
+      setTimeout(() => void speak(`${r} 역이에요.`, ROLE_VOICE_PALETTE[i % ROLE_VOICE_PALETTE.length]), i * 1400);
+    });
   }
 
+  const roleCard = (
+    <Card>
+      <CardTitle title="내 배역 고르기" sub="고른 배역은 기다리고, 나머지 배역을 소리로 읽어드려요." />
+      <div className="flex gap-2">
+        {script.roles.map((r) => (
+          <SelectCard key={r} selected={r === myRole} onClick={() => setMyRole(r)} title={r} sub={`대사 ${count(r)}줄`} />
+        ))}
+      </div>
+    </Card>
+  );
+
+  const modeCard = (
+    <Card>
+      <CardTitle title="리딩 방식" />
+      <div className="flex gap-2">
+        <SelectCard selected={mode === "read"} onClick={() => setMode("read")} icon="volume" title="읽어주기" sub="상대 대사를 소리로 듣고 내 차례에 읽어요" />
+        <SelectCard selected={mode === "quiz"} onClick={() => setMode("quiz")} icon="eye-off" title="암기 대조" sub="내 대사를 가리고 말한 것을 원문과 맞춰요" />
+      </div>
+      <div className="mt-3 flex flex-col gap-2">
+        <SettingRow
+          icon="volume"
+          title="읽어주는 목소리"
+          value={`기기 음성 · ${others.length > 0 ? others.join(", ") + (others.length > 1 ? "는 서로 다른 톤" : "") : "상대 없음"}`}
+          onClick={previewVoice}
+          action="들어보기"
+        />
+        {mode === "read" ? (
+          <SettingRow
+            icon="timer"
+            title="내 차례 넘기는 방식"
+            value={advanceMode === "silence" ? "침묵 감지 · 1.8초 · 소리는 어디에도 안 나가요" : "버튼으로 직접 넘기기"}
+            onClick={() => setAdvanceMode(advanceMode === "silence" ? "manual" : "silence")}
+            action="바꾸기"
+          />
+        ) : (
+          <SettingRow
+            icon="mic"
+            title="말한 것 알아듣기"
+            value={sttAvailable() ? "브라우저 음성인식 · 말소리가 브라우저 음성 서비스로 가요" : "이 브라우저는 음성인식이 없어서 글자로 입력해요"}
+          />
+        )}
+        {voiceNote && <p className="text-[11.5px] text-ink-4 px-1">{voiceNote}</p>}
+      </div>
+    </Card>
+  );
+
+  const start = () => onStart({ myRole, start: 0, end: script.lines.length - 1, mode, advanceMode });
+
   return (
-    <div className="shell">
-      <header className="pt-2 pb-2 flex items-center gap-2">
-        <Button variant="ghost" size="sm" onClick={onBack} className="-ml-3">
-          ← 대본
-        </Button>
-      </header>
-      <h1 className="text-2xl font-bold script-text">{script.title ?? "대본"}</h1>
-      <p className="text-muted text-sm mt-1">
-        배역 {script.roles.length}명 · 대사 {script.lines.filter((l) => l.type === "dialogue").length}줄
-      </p>
-
-      <Section title="내 배역">
-        <div className="flex flex-wrap gap-2">
-          {script.roles.map((r) => (
-            <Chip key={r} color="me" selected={r === myRole} onClick={() => setMyRole(r)}>
-              {r}
-            </Chip>
-          ))}
-        </div>
-      </Section>
-
-      <Section title="상대 배역 목소리">
-        <div className="flex flex-wrap gap-2">
-          {others.map((r) => (
-            <button
-              key={r}
-              type="button"
-              onClick={() => previewVoice(r)}
-              className="h-10 px-3 rounded-full bg-surface border border-line text-sm active:bg-surface-2"
-            >
-              🔈 {r}
-            </button>
-          ))}
-        </div>
-        {voiceNote && <p className="text-xs text-muted mt-2">{voiceNote}</p>}
-        {!voiceNote && getKoreanVoices().length > 0 && (
-          <p className="text-xs text-muted mt-2">기기 음성으로 읽어요. 배역마다 톤을 다르게 배정했어요.</p>
-        )}
-      </Section>
-
-      <Section title="연습 범위">
-        <Segmented
-          value={range}
-          onChange={setRange}
-          options={[
-            { value: "all", label: "전체" },
-            { value: "part", label: "구간" },
-          ]}
-        />
-        {range === "part" && (
-          <div className="mt-3 grid grid-cols-1 gap-2">
-            <label className="text-xs text-muted">
-              시작
-              <select
-                value={start}
-                onChange={(e) => setStart(Number(e.target.value))}
-                className="script-text mt-1 w-full h-11 rounded-xl bg-surface border border-line px-3 text-base text-fg"
-              >
-                {dialogueOptions.map((o) => (
-                  <option key={o.index} value={o.index}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="text-xs text-muted">
-              끝
-              <select
-                value={end}
-                onChange={(e) => setEnd(Number(e.target.value))}
-                className="script-text mt-1 w-full h-11 rounded-xl bg-surface border border-line px-3 text-base text-fg"
-              >
-                {dialogueOptions.map((o) => (
-                  <option key={o.index} value={o.index}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <p className={`text-xs ${rangeOk ? "text-muted" : "text-danger"}`}>
-              {rangeOk ? `대사 ${dialogueCount}줄` : "시작이 끝보다 뒤에 있어요"}
-            </p>
+    <Page>
+      <div className="md:hidden">
+        <TopBar title="배역 정하기" onBack={onBack} />
+      </div>
+      <div className="hidden md:block mb-4">
+        <TopBar title={`상대역 리딩 · ${script.title ?? "대본"}`} onBack={onBack} hint={`배역 ${script.roles.length}명 · 대사 ${dialogue.length}줄`} />
+      </div>
+      <div className="flex-1 flex flex-col gap-4 p-4 md:p-0">
+        <StepsPill states={["done", "on", "off"]} />
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_360px] gap-4 items-start">
+          <Card className="hidden md:block">
+            <div className="flex items-center justify-between pb-2.5 border-b border-line-soft mb-1">
+              <h2 className="text-[16px] font-black">대본 확인</h2>
+              <button type="button" onClick={onReinput} className="text-[12.5px] font-bold text-blue">
+                다시 넣기
+              </button>
+            </div>
+            <ReviewList lines={script.lines} myRole={myRole} className="max-h-[560px] overflow-y-auto" />
+          </Card>
+          <div className="flex flex-col gap-4">
+            {roleCard}
+            {modeCard}
+            <Button size="lg" className="w-full hidden md:flex" onClick={start}>
+              연습 시작
+            </Button>
           </div>
-        )}
-      </Section>
-
-      <Section title="내 차례 넘기기">
-        <Segmented
-          value={advanceMode}
-          onChange={setAdvanceMode}
-          options={[
-            { value: "silence", label: "말이 끝나면 자동" },
-            { value: "manual", label: "버튼으로 직접" },
-          ]}
-        />
-        <p className="text-xs text-muted mt-2">
-          {advanceMode === "silence"
-            ? "마이크 음량만 보고 넘겨요. 소리는 어디에도 저장·전송되지 않아요."
-            : "다 말한 뒤 넘기기를 누르면 돼요."}
-        </p>
-      </Section>
-
-      <Section title="옵션">
-        <Toggle
-          checked={hideMyLines}
-          onChange={setHideMyLines}
-          label="내 대사 가리기"
-          hint="내 차례에 대사를 흐리게 보여요. 필요하면 눌러서 볼 수 있어요."
-        />
-      </Section>
-
-      <div className="mt-auto pt-6">
-        <Button
-          size="lg"
-          className="w-full"
-          disabled={!rangeOk}
-          onClick={() => onStart({ myRole, start: rangeStart, end: rangeEnd, advanceMode, hideMyLines })}
-        >
-          리허설 시작
+        </div>
+      </div>
+      <div className="md:hidden sticky bottom-0 p-4 bg-gray-bg-2/90 backdrop-blur">
+        <Button size="lg" className="w-full" onClick={start}>
+          연습 시작
         </Button>
       </div>
-    </div>
+    </Page>
+  );
+}
+
+function SettingRow({ icon, title, value, onClick, action }: { icon: "volume" | "timer" | "mic"; title: string; value: string; onClick?: () => void; action?: string }) {
+  return (
+    <button type="button" onClick={onClick} disabled={!onClick} className="w-full flex items-center gap-3 px-3.5 py-3 rounded-xl bg-gray-bg text-left active:bg-line disabled:active:bg-gray-bg">
+      <Icon name={icon} size={18} className="text-ink-3" />
+      <span className="flex-1 min-w-0">
+        <span className="block text-[13.5px] font-extrabold">{title}</span>
+        <span className="block text-[12px] text-ink-4">{value}</span>
+      </span>
+      {action && <span className="text-[12px] font-bold text-blue">{action}</span>}
+    </button>
   );
 }

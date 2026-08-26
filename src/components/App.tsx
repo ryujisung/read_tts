@@ -1,32 +1,37 @@
 "use client";
 
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { useDesktop } from "../hooks/useMediaQuery";
 import { storage, type Setup, type StoredScript } from "../lib/storage";
 import { DoneScreen, type RunStats } from "./screens/DoneScreen";
 import { InputScreen } from "./screens/InputScreen";
+import { QuizScreen } from "./screens/QuizScreen";
 import { RehearsalScreen } from "./screens/RehearsalScreen";
+import { ReviewScreen } from "./screens/ReviewScreen";
 import { SetupScreen } from "./screens/SetupScreen";
 
-type Phase = "input" | "setup" | "rehearsal" | "done";
+type Phase = "input" | "review" | "setup" | "run" | "done";
 
 const noop = () => () => {};
-/** 서버·하이드레이션 렌더에서는 false, 그 뒤 클라이언트에서 true */
 function useHydrated() {
   return useSyncExternalStore(noop, () => true, () => false);
 }
-
 const isClient = typeof window !== "undefined";
 
 export function App() {
   const hydrated = useHydrated();
-  // 새로고침해도 같은 탭이면 이어간다 (sessionStorage). 초기값을 여기서 읽어도
-  // hydrated가 false인 동안은 빈 셸만 그리므로 서버 HTML과 어긋나지 않는다.
+  const desktop = useDesktop();
   const [script, setScript] = useState<StoredScript | null>(() => (isClient ? storage.loadScript() : null));
   const [setup, setSetup] = useState<Setup | null>(() => (isClient ? storage.loadSetup() : null));
   const [phase, setPhase] = useState<Phase>(() => (isClient && storage.loadScript() ? "setup" : "input"));
   const [stats, setStats] = useState<RunStats | null>(null);
 
-  if (!hydrated) return <div className="shell" />;
+  if (!hydrated) return <div className="min-h-svh" />;
+
+  const saveSetup = (st: Setup) => {
+    setSetup(st);
+    storage.saveSetup(st);
+  };
 
   if (phase === "input" || !script) {
     return (
@@ -35,42 +40,45 @@ export function App() {
         onParsed={(s) => {
           setScript(s);
           storage.saveScript(s);
-          // 배역 목록이 바뀌었으면 이전 설정은 버린다
           const keep = setup && s.roles.includes(setup.myRole) ? setup : null;
           setSetup(keep);
-          setPhase("setup");
+          // 데스크톱은 대본 확인과 배역 정하기를 한 화면에 같이 보여 준다
+          setPhase(desktop ? "setup" : "review");
         }}
       />
     );
   }
 
-  if (phase === "setup") {
+  if (phase === "review" && !desktop) {
+    return <ReviewScreen script={script} onBack={() => setPhase("input")} onNext={() => setPhase("setup")} />;
+  }
+
+  if (phase === "setup" || phase === "review") {
     return (
       <SetupScreen
         script={script}
         initialSetup={setup}
-        onBack={() => setPhase("input")}
+        onBack={() => setPhase(desktop ? "input" : "review")}
+        onReinput={() => setPhase("input")}
         onStart={(st) => {
-          setSetup(st);
-          storage.saveSetup(st);
-          setPhase("rehearsal");
+          saveSetup(st);
+          setPhase("run");
         }}
       />
     );
   }
 
-  if (phase === "rehearsal" && setup) {
-    return (
-      <RehearsalScreen
-        script={script}
-        setup={setup}
-        onExit={() => setPhase("setup")}
-        onFinish={(st) => {
-          setStats(st);
-          setPhase("done");
-        }}
-      />
-    );
+  if (phase === "run" && setup) {
+    const common = {
+      script,
+      setup,
+      onExit: () => setPhase("setup"),
+      onFinish: (st: RunStats) => {
+        setStats(st);
+        setPhase("done");
+      },
+    };
+    return setup.mode === "quiz" ? <QuizScreen {...common} /> : <RehearsalScreen {...common} />;
   }
 
   if (phase === "done" && setup && stats) {
@@ -79,13 +87,7 @@ export function App() {
         script={script}
         setup={setup}
         stats={stats}
-        onRepeat={() => setPhase("rehearsal")}
-        onRestartAll={() => {
-          const st = { ...setup, start: 0, end: script.lines.length - 1 };
-          setSetup(st);
-          storage.saveSetup(st);
-          setPhase("rehearsal");
-        }}
+        onRepeat={() => setPhase("run")}
         onChangeSetup={() => setPhase("setup")}
         onNewScript={() => {
           storage.saveScript(null);
@@ -98,7 +100,6 @@ export function App() {
     );
   }
 
-  // 앞 단계 데이터가 없으면 앞 화면으로
   return <Redirect to={() => setPhase("setup")} />;
 }
 
@@ -107,5 +108,5 @@ function Redirect({ to }: { to: () => void }) {
     to();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  return <div className="shell" />;
+  return <div className="min-h-svh" />;
 }

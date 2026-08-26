@@ -3,7 +3,8 @@
 /**
  * 상태머신 + TTS + 마이크를 잇는 러너.
  *  ai  → 상대 대사를 읽고 끝나면 advance
- *  me  → (침묵 감지 모드) 마이크를 켜고 말이 끝나면 advance / (수동) 버튼을 기다린다
+ *  me  → myTurn이 "silence"면 마이크를 켜고 말이 끝나면 advance,
+ *        "manual"이면 버튼을, "wait"(암기 대조)면 화면이 next()를 부를 때까지 기다린다
  * 상태가 바뀌면 진행 중이던 TTS·마이크는 항상 정리한다.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -20,10 +21,11 @@ import {
   type RehearsalState,
 } from "../lib/rehearsal/machine";
 import type { DialogueLine } from "../lib/script/parse";
-import type { AdvanceMode } from "../lib/storage";
+
+export type MyTurnMode = "silence" | "manual" | "wait";
 
 export interface RunnerOptions {
-  advanceMode: AdvanceMode;
+  myTurn: MyTurnMode;
   styleFor: (role: string) => VoiceStyle;
 }
 
@@ -44,7 +46,7 @@ export function useRehearsalRunner(cfg: RehearsalConfig, opts: RunnerOptions) {
   const [state, setState] = useState<RehearsalState>(() => createRehearsal(cfg));
   const [level, setLevel] = useState(0);
   const [micError, setMicError] = useState<string | null>(null);
-  const [effectiveMode, setEffectiveMode] = useState<AdvanceMode>(opts.advanceMode);
+  const [myTurn, setMyTurn] = useState<MyTurnMode>(opts.myTurn);
   const abortRef = useRef<AbortController | null>(null);
   const micRef = useRef<MicListener | null>(null);
   const styleForRef = useRef(opts.styleFor);
@@ -58,7 +60,6 @@ export function useRehearsalRunner(cfg: RehearsalConfig, opts: RunnerOptions) {
     micRef.current?.stop();
     micRef.current = null;
     cancelSpeech();
-    // level은 여기서 0으로 되돌리지 않는다 — 화면이 "내 차례"일 때만 보여 주므로 상관없다
   }, []);
 
   useEffect(() => {
@@ -74,7 +75,7 @@ export function useRehearsalRunner(cfg: RehearsalConfig, opts: RunnerOptions) {
         if (ac.signal.aborted) return;
         setState((s) => (s.status === "ai" ? advance(s) : s));
       })();
-    } else if (state.status === "me" && effectiveMode === "silence") {
+    } else if (state.status === "me" && myTurn === "silence") {
       const ac = new AbortController();
       abortRef.current = ac;
       (async () => {
@@ -95,27 +96,27 @@ export function useRehearsalRunner(cfg: RehearsalConfig, opts: RunnerOptions) {
           }
           micRef.current = mic;
         } catch {
-          setMicError("마이크를 쓸 수 없어서 직접 넘기기로 진행해요.");
-          setEffectiveMode("manual");
+          setMicError("마이크를 쓸 수 없어서 버튼으로 넘기는 방식으로 진행해요.");
+          setMyTurn("manual");
         }
       })();
     }
     return cleanup;
-  }, [state, effectiveMode, cleanup]);
+  }, [state, myTurn, cleanup]);
 
   const start = useCallback(async () => {
     unlockTts();
-    if (effectiveMode === "silence") {
+    if (myTurn === "silence") {
       try {
         const s = await navigator.mediaDevices.getUserMedia({ audio: true });
         s.getTracks().forEach((t) => t.stop());
       } catch {
-        setMicError("마이크 권한이 없어서 직접 넘기기로 진행해요.");
-        setEffectiveMode("manual");
+        setMicError("마이크 권한이 없어서 버튼으로 넘기는 방식으로 진행해요.");
+        setMyTurn("manual");
       }
     }
     setState((s) => begin(s));
-  }, [effectiveMode]);
+  }, [myTurn]);
 
   const togglePause = useCallback(() => {
     setState((s) => (s.status === "paused" ? resume(s) : pause(s)));
@@ -129,5 +130,5 @@ export function useRehearsalRunner(cfg: RehearsalConfig, opts: RunnerOptions) {
     cleanup();
   }, [cleanup]);
 
-  return { state, level, micError, effectiveMode, start, togglePause, next, stop };
+  return { state, level, micError, myTurn, start, togglePause, next, stop };
 }
