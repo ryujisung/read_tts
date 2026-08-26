@@ -64,8 +64,11 @@ export function useRehearsalRunner(cfg: RehearsalConfig, opts: RunnerOptions) {
 
   // 다음에 나올 상대 대사를 미리 합성해 둔다. 신경망 합성은 한 줄에 1~2초가 걸려서,
   // 미리 해 두지 않으면 내 차례가 끝날 때마다 침묵이 생긴다. 결과는 엔진 안에 남는다.
+  //
+  // 내 차례에만 한다. 상대가 읽는 동안에 돌리면 합성과 재생이 같은 자원을 다투어
+  // 소리가 끊긴다. 내 차례는 어차피 기다리는 시간이라 여기서 하는 편이 맞다.
   useEffect(() => {
-    if (state.status !== "me" && state.status !== "ai") return;
+    if (state.status !== "me") return;
     const upcoming = state.lines
       .slice(state.index + 1)
       .find((l): l is DialogueLine => l.type === "dialogue" && l.role !== state.myRole);

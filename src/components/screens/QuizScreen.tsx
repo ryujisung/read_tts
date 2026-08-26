@@ -169,10 +169,16 @@ export function QuizScreen({ script, setup, onFinish, onExit }: { script: Stored
             )}
           </div>
           <div className="rounded-[14px] bg-gray-bg px-3.5 py-3">
-            <p className="text-[11.5px] font-bold text-ink-4">방금 말한 것 (글자로 바꿈)</p>
-            <p className="script-text text-[14px] md:text-[15px] mt-1 min-h-5">
+            <p className="text-[11.5px] font-bold text-ink-4">
+              {listening ? "듣는 중 · 말하는 대로 적혀요" : "이렇게 들었어요"}
+            </p>
+            {/* 고치지 않고 그대로 보여 준다 — 왜 안 맞았는지는 본인이 봐야 안다 */}
+            <p className="script-text text-[15px] md:text-[16px] mt-1 min-h-6">
               {said || (listening ? <span className="text-blue">듣고 있어요…</span> : <span className="text-ink-5">아직 없어요</span>)}
             </p>
+            {judge?.kind === "retry" && (
+              <p className="text-[12px] text-red mt-1.5">대본과 달라요. 다시 말해 보세요.</p>
+            )}
           </div>
           {typing && (
             <form
