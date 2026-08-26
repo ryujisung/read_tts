@@ -38,6 +38,9 @@
 - `src/lib/audio/tts.ts` — 두 엔진(Supertonic·기기 음성)의 파사드. 배역별 목소리 배정, 한국어 음성 품질 정렬, iOS 언락, 괄호 지문 제거, 다음 대사 미리 합성.
 - `src/lib/audio/supertonic/` — 브라우저 신경망 음성. `engine.ts`(장치·가중치 선택과 합성), `cache.ts`(모델 캐시), `play.ts`(재생과 진폭 안전장치), `helper.js`(원본 런타임 벤더링).
 - `src/lib/audio/mic.ts` — getUserMedia → AnalyserNode → RMS만 뽑아 감지기에 넣는다. 녹음·전송 없음.
+- `src/lib/script/extract.ts` — 파일 종류를 보고 알맞은 추출기로 넘긴다. hwp · pdf · docx · txt.
+- `src/lib/script/hwp.ts` — 한글 파일. 배역과 대사를 가르는 탭을 살린다. 한글 97 형식은 알아보고 알린다.
+- `src/lib/script/docx.ts` — 워드 파일. 서식은 버리고 글자만.
 - `src/lib/script/pdf.ts` — pdf.js로 브라우저 안에서 텍스트 추출(워커는 `public/pdf.worker.min.mjs`).
 - `src/lib/storage.ts` — `sessionStorage` 저장/복원.
 - `src/hooks/useRehearsalRunner.ts` — 상태머신 + TTS + 마이크를 잇는 러너. 상태가 바뀌면 진행 중인 TTS·마이크를 항상 정리한다.
