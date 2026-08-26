@@ -1,25 +1,13 @@
 /**
- * Supertonic 음성 엔진. 기기 내장 speechSynthesis 를 대신해 상대 대사를 읽는다.
+ * Supertonic 음성 엔진의 창구. 실제 추론은 워커에서 돈다(worker.ts).
  *
- * 모델은 브라우저 안에서 돈다 — 대본이 네트워크로 나가지 않는다는 원칙은 그대로다.
- * WebGPU 가 있으면 쓰고, 없으면 WebAssembly 로 떨어진다.
+ * 모델은 브라우저 안에서 돌아간다 — 대본이 네트워크로 나가지 않는다는 원칙은 그대로다.
  */
-import * as ort from "onnxruntime-web";
-import { loadOnnx, loadVoiceStyle, UnicodeProcessor, TextToSpeech, type VoiceStyleTensors } from "./helper.js";
-import { fetchModel, isCached } from "./cache";
-import {
-  CONFIG_URL,
-  INDEXER_URL,
-  MODEL_KINDS,
-  MODEL_VARIANTS,
-  variantBytes,
-  voiceStyleUrl,
-  type ModelKind,
-  type Variant,
-  type VoicePreset,
-} from "./models";
+import { isCached } from "./cache";
+import { MODEL_VARIANTS, variantBytes, type Variant, type VoicePreset } from "./models";
+import type { Backend, FromWorker, ToWorker } from "./worker";
 
-export type Backend = "webgpu" | "wasm";
+export type { Backend };
 
 export interface LoadProgress {
   /** 0~1 */
@@ -30,120 +18,11 @@ export interface LoadProgress {
   cached: boolean;
 }
 
-interface Loaded {
-  tts: TextToSpeech;
-  backend: Backend;
-  variant: Variant;
-}
-
-let loading: Promise<Loaded> | null = null;
-let loaded: Loaded | null = null;
-const styleCache = new Map<VoicePreset, VoiceStyleTensors>();
-
-/** onnxruntime 의 wasm 런타임 위치. public/ort 에 복사해 둔다(scripts/copy-ort.mjs). */
-function configureOrt() {
-  ort.env.wasm.wasmPaths = "/ort/";
-  // 교차 출처 격리를 켜지 않아 SharedArrayBuffer 가 없다. 스레드는 1개로 고정한다.
-  ort.env.wasm.numThreads = 1;
-}
-
-/**
- * 어느 장치로 돌릴지 먼저 정한다. 가중치를 받기 전에 정해야 하는데, 장치에 따라
- * 받아야 할 가중치가 다르기 때문이다(int8 은 WebGPU 에서 깨진다 — models.ts 참고).
- */
-async function pickBackend(prefer?: Backend): Promise<Backend> {
-  if (prefer) return prefer;
-  const gpu = (navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
-  if (!gpu) return "wasm";
-  try {
-    return (await gpu.requestAdapter()) ? "webgpu" : "wasm";
-  } catch {
-    return "wasm";
-  }
-}
-
-/** WebGPU 에는 fp32 만, wasm 에는 작은 int8 을 준다. */
-function variantFor(backend: Backend): Variant {
-  return backend === "webgpu" ? "fp32" : "int8";
-}
-
-async function createSessions(
-  bytes: Record<ModelKind, Uint8Array>,
-  backend: Backend,
-): Promise<ort.InferenceSession[]> {
-  const sessions: ort.InferenceSession[] = [];
-  for (const k of MODEL_KINDS) {
-    sessions.push(await loadOnnx(bytes[k], { executionProviders: [backend] }));
-  }
-  return sessions;
-}
-
-/** 모델을 받아 세션을 연다. 여러 번 불러도 실제 작업은 한 번만 한다. */
-export function load(onProgress?: (p: LoadProgress) => void, prefer?: Backend): Promise<Loaded> {
-  if (loaded) return Promise.resolve(loaded);
-  if (loading) return loading;
-
-  const started = (async () => {
-    configureOrt();
-
-    const backend = await pickBackend(prefer);
-    const variant = variantFor(backend);
-    const { urls, bytes: sizes } = MODEL_VARIANTS[variant];
-    const total = variantBytes(variant);
-
-    const progress: Record<string, number> = {};
-    let allCached = true;
-
-    const report = () => {
-      const done = Object.values(progress).reduce((a, b) => a + b, 0);
-      onProgress?.({
-        ratio: Math.min(1, done / total),
-        loaded: done,
-        total,
-        cached: allCached,
-      });
-    };
-
-    const parts = await Promise.all(
-      MODEL_KINDS.map(async (k) => {
-        const buf = await fetchModel(urls[k], sizes[k], (p) => {
-          if (!p.cached) allCached = false;
-          progress[k] = p.loaded;
-          report();
-        });
-        return [k, buf] as const;
-      }),
-    );
-    const bytes = Object.fromEntries(parts) as Record<ModelKind, Uint8Array>;
-
-    const [cfgs, indexer] = await Promise.all([
-      fetch(CONFIG_URL).then((r) => r.json()),
-      fetch(INDEXER_URL).then((r) => r.json()),
-    ]);
-
-    const [dp, textEnc, vectorEst, vocoder] = await createSessions(bytes, backend);
-    const tts = new TextToSpeech(cfgs, new UnicodeProcessor(indexer), dp, textEnc, vectorEst, vocoder);
-
-    const done: Loaded = { tts, backend, variant };
-    loaded = done;
-    return done;
-  })();
-
-  started.catch(() => {
-    // 실패한 시도를 붙잡고 있으면 재시도가 영영 같은 오류를 받는다.
-    loading = null;
-  });
-
-  loading = started;
-  return started;
-}
-
-async function styleFor(preset: VoicePreset): Promise<VoiceStyleTensors> {
-  const hit = styleCache.get(preset);
-  if (hit) return hit;
-  const style = await loadVoiceStyle([voiceStyleUrl(preset)]);
-  styleCache.set(preset, style);
-  return style;
+export interface Synthesized {
+  samples: Float32Array;
+  sampleRate: number;
+  /** 초 */
+  duration: number;
 }
 
 export interface SynthOptions {
@@ -153,48 +32,150 @@ export interface SynthOptions {
   steps?: number;
 }
 
-export interface Synthesized {
-  samples: Float32Array;
-  sampleRate: number;
-  /** 초 */
-  duration: number;
+let worker: Worker | null = null;
+let seq = 0;
+let loading: Promise<{ backend: Backend; variant: Variant }> | null = null;
+let info: { backend: Backend; variant: Variant } | null = null;
+
+type Pending = {
+  resolve: (v: never) => void;
+  reject: (e: Error) => void;
+  onProgress?: (p: LoadProgress) => void;
+};
+const pending = new Map<number, Pending>();
+
+function getWorker(): Worker {
+  if (worker) return worker;
+  worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+  worker.onmessage = (e: MessageEvent<FromWorker>) => {
+    const m = e.data;
+    const p = pending.get(m.id);
+    if (!p) return;
+    if (m.type === "progress") {
+      p.onProgress?.({ ratio: m.ratio, loaded: m.loaded, total: m.total, cached: m.cached });
+      return;
+    }
+    pending.delete(m.id);
+    if (m.type === "error") p.reject(new Error(m.message));
+    else if (m.type === "loaded") (p.resolve as (v: unknown) => void)({ backend: m.backend, variant: m.variant });
+    else (p.resolve as (v: unknown) => void)({ samples: m.samples, sampleRate: m.sampleRate, duration: m.duration });
+  };
+  return worker;
 }
 
-/** 대사 한 줄을 소리로 만든다. 재생은 하지 않는다 — 미리 만들어 두려면 이쪽을 쓴다. */
-export async function synthesize(
-  text: string,
-  preset: VoicePreset,
-  opts: SynthOptions = {},
-): Promise<Synthesized> {
-  const { tts } = await load();
-  const style = await styleFor(preset);
-  const { wav, duration } = await tts.call(text, "ko", style, opts.steps ?? 8, opts.speed ?? 1.0);
-  const len = Math.min(wav.length, Math.floor(tts.sampleRate * duration[0]));
-  return { samples: wav.slice(0, len), sampleRate: tts.sampleRate, duration: duration[0] };
+/** 유니온에 Omit 을 그냥 쓰면 갈래별로 나뉘지 않아 공통 필드만 남는다. 갈래마다 벗겨 낸다. */
+type WithoutId<T> = T extends { id: number } ? Omit<T, "id"> : never;
+
+function send<T>(msg: WithoutId<ToWorker>, onProgress?: (p: LoadProgress) => void): Promise<T> {
+  const id = ++seq;
+  const w = getWorker();
+  return new Promise<T>((resolve, reject) => {
+    pending.set(id, { resolve: resolve as Pending["resolve"], reject, onProgress });
+    w.postMessage({ ...msg, id } as ToWorker);
+  });
+}
+
+/** 모델을 받아 워커를 준비시킨다. 여러 번 불러도 실제 작업은 한 번만 한다. */
+export function load(onProgress?: (p: LoadProgress) => void, prefer?: Backend) {
+  if (info) return Promise.resolve(info);
+  loading ??= send<{ backend: Backend; variant: Variant }>({ type: "load", prefer }, onProgress)
+    .then((got) => {
+      info = got;
+      return got;
+    })
+    .catch((e) => {
+      // 실패한 시도를 붙잡고 있으면 재시도가 영영 같은 오류를 받는다.
+      loading = null;
+      throw e;
+    });
+  return loading;
+}
+
+/**
+ * 만들어 둔 소리를 다시 쓰기 위한 곳.
+ *
+ * 미리 만들어 두는 의미가 여기에 있다 — 캐시가 없으면 prefetch 가 한 일을
+ * speak 이 그대로 다시 해서 작업량만 두 배가 된다.
+ * 대본 한 편이 수백 줄이므로 최근 것만 남긴다.
+ */
+const MAX_CACHED = 24;
+const audioCache = new Map<string, Promise<Synthesized>>();
+const keyOf = (text: string, preset: VoicePreset, o: SynthOptions) =>
+  `${preset}|${o.speed ?? 1.0}|${o.steps ?? 8}|${text}`;
+
+/** 대사 한 줄을 소리로 만든다. 같은 대사를 다시 청하면 만들어 둔 것을 준다. */
+export function synthesize(text: string, preset: VoicePreset, opts: SynthOptions = {}): Promise<Synthesized> {
+  const key = keyOf(text, preset, opts);
+  const hit = audioCache.get(key);
+  if (hit) {
+    // 최근 것으로 올려 둔다 — 다시 쓰인 것은 곧 또 쓰일 만하다.
+    audioCache.delete(key);
+    audioCache.set(key, hit);
+    return hit;
+  }
+
+  const made = load()
+    .then(() =>
+      send<Synthesized>({
+        type: "synth",
+        text,
+        preset,
+        speed: opts.speed ?? 1.0,
+        steps: opts.steps ?? 8,
+      }),
+    )
+    .catch((e) => {
+      // 실패한 것을 남겨 두면 다시 시도해도 같은 실패만 돌려준다.
+      audioCache.delete(key);
+      throw e;
+    });
+
+  audioCache.set(key, made);
+  while (audioCache.size > MAX_CACHED) {
+    const oldest = audioCache.keys().next().value;
+    if (oldest === undefined) break;
+    audioCache.delete(oldest);
+  }
+  return made;
 }
 
 /** 이 기기가 받게 될 가중치가 이미 캐시에 있는지 — 다운로드 안내를 띄울지 정할 때 쓴다. */
 export async function hasCachedModels(): Promise<boolean> {
-  const backend = await pickBackend();
-  return isCached(Object.values(MODEL_VARIANTS[variantFor(backend)].urls));
+  const v = await guessVariant();
+  return isCached(Object.values(MODEL_VARIANTS[v].urls));
 }
 
 /** 이 기기가 받아야 할 용량. 안내 문구에 쓴다. */
 export async function downloadSize(): Promise<number> {
-  return variantBytes(variantFor(await pickBackend()));
+  return variantBytes(await guessVariant());
+}
+
+/** 워커를 깨우지 않고도 어느 가중치를 쓸지 알아야 안내 문구를 그릴 수 있다. */
+async function guessVariant(): Promise<Variant> {
+  if (info) return info.variant;
+  const gpu = (navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
+  if (!gpu) return "int8";
+  try {
+    return (await gpu.requestAdapter()) ? "fp32" : "int8";
+  } catch {
+    return "int8";
+  }
 }
 
 export function currentBackend(): Backend | null {
-  return loaded?.backend ?? null;
+  return info?.backend ?? null;
 }
 
 export function currentVariant(): Variant | null {
-  return loaded?.variant ?? null;
+  return info?.variant ?? null;
 }
 
 /** 테스트에서 상태를 되돌리기 위한 것. */
 export function _reset() {
-  loaded = null;
+  worker?.terminate();
+  worker = null;
+  info = null;
   loading = null;
-  styleCache.clear();
+  pending.clear();
+  audioCache.clear();
 }

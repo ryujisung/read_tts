@@ -179,10 +179,8 @@ export function setEngine(next: Engine): void {
  * WebGPU 는 첫 합성에서 셰이더를 컴파일하느라 3초 넘게 걸린다.
  */
 export async function enableSupertonic(onProgress?: Parameters<typeof loadSupertonic>[0]): Promise<void> {
+  // 워커가 모델을 연 직후에 스스로 한 번 데우므로 여기서 따로 하지 않는다.
   await loadSupertonic(onProgress);
-  await synthesize("음", PRESET_ORDER[0]).catch(() => {
-    // 데우기가 실패해도 첫 대사가 조금 늦어질 뿐이다.
-  });
   engine = "supertonic";
 }
 
