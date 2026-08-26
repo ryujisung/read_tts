@@ -15,22 +15,61 @@ const INT8 = "https://huggingface.co/csukuangfj2/sherpa-onnx-supertonic-3-tts-in
 /** 설정·문자 인덱서·보이스 프리셋 — 원본 저장소. 전부 합쳐 400KB 남짓이라 양자화와 무관하다. */
 const BASE = "https://huggingface.co/Supertone/supertonic-3/resolve/main";
 
-export const MODEL_URLS = {
-  durationPredictor: `${INT8}/duration_predictor.int8.onnx`,
-  textEncoder: `${INT8}/text_encoder.int8.onnx`,
-  vectorEstimator: `${INT8}/vector_estimator.int8.onnx`,
-  vocoder: `${INT8}/vocoder.int8.onnx`,
-} as const;
+export type ModelKind = "durationPredictor" | "textEncoder" | "vectorEstimator" | "vocoder";
 
-/** 진행률 표시용 — 실제 Content-Length 와 맞춰 둔 값이다. */
-export const MODEL_BYTES: Record<keyof typeof MODEL_URLS, number> = {
-  durationPredictor: 3_700_147,
-  textEncoder: 36_416_150,
-  vectorEstimator: 78_400_833,
-  vocoder: 25_991_073,
-};
+/**
+ * 가중치는 두 벌이다.
+ *
+ * int8 은 작지만 **WebGPU 에서 쓸 수 없다** — onnxruntime 의 WebGPU 백엔드가 양자화
+ * 연산을 제대로 처리하지 못해 진폭이 수천만 배로 터진 잡음이 나온다. 측정값:
+ * int8+webgpu 는 rms 21,863,463 / peak 96,648,832, 정상은 rms 0.056 / peak 0.327.
+ * 같은 int8 을 wasm 으로 돌리면 rms 0.0561 로 정상이라 런타임 쪽 한계가 맞다.
+ *
+ * 그래서 실행 장치에 따라 가중치를 고른다. WebGPU 면 fp32, wasm 이면 int8.
+ */
+export const MODEL_VARIANTS = {
+  fp32: {
+    urls: {
+      durationPredictor: `${BASE}/onnx/duration_predictor.onnx`,
+      textEncoder: `${BASE}/onnx/text_encoder.onnx`,
+      vectorEstimator: `${BASE}/onnx/vector_estimator.onnx`,
+      vocoder: `${BASE}/onnx/vocoder.onnx`,
+    },
+    bytes: {
+      durationPredictor: 3_700_147,
+      textEncoder: 36_416_150,
+      vectorEstimator: 256_534_781,
+      vocoder: 101_424_195,
+    },
+  },
+  int8: {
+    urls: {
+      durationPredictor: `${INT8}/duration_predictor.int8.onnx`,
+      textEncoder: `${INT8}/text_encoder.int8.onnx`,
+      vectorEstimator: `${INT8}/vector_estimator.int8.onnx`,
+      vocoder: `${INT8}/vocoder.int8.onnx`,
+    },
+    bytes: {
+      durationPredictor: 3_700_147,
+      textEncoder: 36_416_150,
+      vectorEstimator: 78_400_833,
+      vocoder: 25_991_073,
+    },
+  },
+} as const satisfies Record<string, { urls: Record<ModelKind, string>; bytes: Record<ModelKind, number> }>;
 
-export const TOTAL_MODEL_BYTES = Object.values(MODEL_BYTES).reduce((a, b) => a + b, 0);
+export type Variant = keyof typeof MODEL_VARIANTS;
+
+export const MODEL_KINDS: readonly ModelKind[] = [
+  "durationPredictor",
+  "textEncoder",
+  "vectorEstimator",
+  "vocoder",
+];
+
+export function variantBytes(v: Variant): number {
+  return Object.values(MODEL_VARIANTS[v].bytes).reduce((a, b) => a + b, 0);
+}
 
 export const CONFIG_URL = `${BASE}/onnx/tts.json`;
 export const INDEXER_URL = `${BASE}/onnx/unicode_indexer.json`;

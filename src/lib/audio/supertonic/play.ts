@@ -22,9 +22,29 @@ function getContext(): AudioContext | null {
   return ctx;
 }
 
+/**
+ * 합성이 깨지면 진폭이 정상 범위를 한참 벗어난다. 그대로 재생하면 스피커로
+ * 굉음이 나가므로 — 사람 귀가 먼저 다친다 — 내보내기 전에 막는다.
+ * 정상 음성의 peak 는 1 이하다. 여유를 둬서 2 를 넘으면 깨진 것으로 본다.
+ */
+export function isSane(samples: ArrayLike<number>): boolean {
+  if (samples.length === 0) return false;
+  // 전체를 훑을 필요는 없다. 고르게 뽑아 봐도 깨진 신호는 바로 드러난다.
+  const step = Math.max(1, Math.floor(samples.length / 4096));
+  for (let i = 0; i < samples.length; i += step) {
+    const x = samples[i];
+    if (!Number.isFinite(x) || Math.abs(x) > 2) return false;
+  }
+  return true;
+}
+
 export function playSynthesized(audio: Synthesized, signal?: AbortSignal): Promise<void> {
   const c = getContext();
   if (!c || signal?.aborted) return Promise.resolve();
+  if (!isSane(audio.samples)) {
+    console.error("[tts] 합성 결과가 정상 범위를 벗어나 재생하지 않는다.");
+    return Promise.resolve();
+  }
 
   return new Promise((resolve) => {
     const buf = c.createBuffer(1, audio.samples.length, audio.sampleRate);

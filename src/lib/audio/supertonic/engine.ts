@@ -10,10 +10,12 @@ import { fetchModel, isCached } from "./cache";
 import {
   CONFIG_URL,
   INDEXER_URL,
-  MODEL_BYTES,
-  MODEL_URLS,
-  TOTAL_MODEL_BYTES,
+  MODEL_KINDS,
+  MODEL_VARIANTS,
+  variantBytes,
   voiceStyleUrl,
+  type ModelKind,
+  type Variant,
   type VoicePreset,
 } from "./models";
 
@@ -31,6 +33,7 @@ export interface LoadProgress {
 interface Loaded {
   tts: TextToSpeech;
   backend: Backend;
+  variant: Variant;
 }
 
 let loading: Promise<Loaded> | null = null;
@@ -44,53 +47,66 @@ function configureOrt() {
   ort.env.wasm.numThreads = 1;
 }
 
-async function createSessions(
-  bytes: Record<keyof typeof MODEL_URLS, Uint8Array>,
-): Promise<{ sessions: ort.InferenceSession[]; backend: Backend }> {
-  const order = ["durationPredictor", "textEncoder", "vectorEstimator", "vocoder"] as const;
-
-  // WebGPU 를 먼저 시도한다. 어느 모델 하나라도 거부당하면 통째로 wasm 으로 간다 —
-  // 섞어 쓰면 텐서가 장치를 오가며 오히려 느려진다.
+/**
+ * 어느 장치로 돌릴지 먼저 정한다. 가중치를 받기 전에 정해야 하는데, 장치에 따라
+ * 받아야 할 가중치가 다르기 때문이다(int8 은 WebGPU 에서 깨진다 — models.ts 참고).
+ */
+async function pickBackend(prefer?: Backend): Promise<Backend> {
+  if (prefer) return prefer;
+  const gpu = (navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
+  if (!gpu) return "wasm";
   try {
-    const sessions = [];
-    for (const k of order) {
-      sessions.push(await loadOnnx(bytes[k], { executionProviders: ["webgpu"] }));
-    }
-    return { sessions, backend: "webgpu" };
+    return (await gpu.requestAdapter()) ? "webgpu" : "wasm";
   } catch {
-    const sessions = [];
-    for (const k of order) {
-      sessions.push(await loadOnnx(bytes[k], { executionProviders: ["wasm"] }));
-    }
-    return { sessions, backend: "wasm" };
+    return "wasm";
   }
 }
 
+/** WebGPU 에는 fp32 만, wasm 에는 작은 int8 을 준다. */
+function variantFor(backend: Backend): Variant {
+  return backend === "webgpu" ? "fp32" : "int8";
+}
+
+async function createSessions(
+  bytes: Record<ModelKind, Uint8Array>,
+  backend: Backend,
+): Promise<ort.InferenceSession[]> {
+  const sessions: ort.InferenceSession[] = [];
+  for (const k of MODEL_KINDS) {
+    sessions.push(await loadOnnx(bytes[k], { executionProviders: [backend] }));
+  }
+  return sessions;
+}
+
 /** 모델을 받아 세션을 연다. 여러 번 불러도 실제 작업은 한 번만 한다. */
-export function load(onProgress?: (p: LoadProgress) => void): Promise<Loaded> {
+export function load(onProgress?: (p: LoadProgress) => void, prefer?: Backend): Promise<Loaded> {
   if (loaded) return Promise.resolve(loaded);
   if (loading) return loading;
 
   const started = (async () => {
     configureOrt();
 
-    const keys = ["durationPredictor", "textEncoder", "vectorEstimator", "vocoder"] as const;
+    const backend = await pickBackend(prefer);
+    const variant = variantFor(backend);
+    const { urls, bytes: sizes } = MODEL_VARIANTS[variant];
+    const total = variantBytes(variant);
+
     const progress: Record<string, number> = {};
     let allCached = true;
 
     const report = () => {
       const done = Object.values(progress).reduce((a, b) => a + b, 0);
       onProgress?.({
-        ratio: Math.min(1, done / TOTAL_MODEL_BYTES),
+        ratio: Math.min(1, done / total),
         loaded: done,
-        total: TOTAL_MODEL_BYTES,
+        total,
         cached: allCached,
       });
     };
 
     const parts = await Promise.all(
-      keys.map(async (k) => {
-        const buf = await fetchModel(MODEL_URLS[k], MODEL_BYTES[k], (p) => {
+      MODEL_KINDS.map(async (k) => {
+        const buf = await fetchModel(urls[k], sizes[k], (p) => {
           if (!p.cached) allCached = false;
           progress[k] = p.loaded;
           report();
@@ -98,18 +114,17 @@ export function load(onProgress?: (p: LoadProgress) => void): Promise<Loaded> {
         return [k, buf] as const;
       }),
     );
-    const bytes = Object.fromEntries(parts) as Record<keyof typeof MODEL_URLS, Uint8Array>;
+    const bytes = Object.fromEntries(parts) as Record<ModelKind, Uint8Array>;
 
     const [cfgs, indexer] = await Promise.all([
       fetch(CONFIG_URL).then((r) => r.json()),
       fetch(INDEXER_URL).then((r) => r.json()),
     ]);
 
-    const { sessions, backend } = await createSessions(bytes);
-    const [dp, textEnc, vectorEst, vocoder] = sessions;
+    const [dp, textEnc, vectorEst, vocoder] = await createSessions(bytes, backend);
     const tts = new TextToSpeech(cfgs, new UnicodeProcessor(indexer), dp, textEnc, vectorEst, vocoder);
 
-    const done: Loaded = { tts, backend };
+    const done: Loaded = { tts, backend, variant };
     loaded = done;
     return done;
   })();
@@ -158,13 +173,23 @@ export async function synthesize(
   return { samples: wav.slice(0, len), sampleRate: tts.sampleRate, duration: duration[0] };
 }
 
-/** 이미 받아 둔 모델이 있는지 — 다운로드 안내를 띄울지 정할 때 쓴다. */
-export function hasCachedModels(): Promise<boolean> {
-  return isCached(Object.values(MODEL_URLS));
+/** 이 기기가 받게 될 가중치가 이미 캐시에 있는지 — 다운로드 안내를 띄울지 정할 때 쓴다. */
+export async function hasCachedModels(): Promise<boolean> {
+  const backend = await pickBackend();
+  return isCached(Object.values(MODEL_VARIANTS[variantFor(backend)].urls));
+}
+
+/** 이 기기가 받아야 할 용량. 안내 문구에 쓴다. */
+export async function downloadSize(): Promise<number> {
+  return variantBytes(variantFor(await pickBackend()));
 }
 
 export function currentBackend(): Backend | null {
   return loaded?.backend ?? null;
+}
+
+export function currentVariant(): Variant | null {
+  return loaded?.variant ?? null;
 }
 
 /** 테스트에서 상태를 되돌리기 위한 것. */
