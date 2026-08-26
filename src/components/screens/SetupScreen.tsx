@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { micSupported } from "../../lib/audio/mic";
 import { sttAvailable } from "../../lib/audio/stt";
-import { isRemoteOnly, ROLE_VOICE_PALETTE, speak, ttsSupported, unlockTts, waitForVoices } from "../../lib/audio/tts";
+import { assignVoices, getEngine, speak, ttsSupported, unlockTts, type Engine } from "../../lib/audio/tts";
+import { VoiceSetup } from "../VoiceSetup";
 import type { AdvanceMode, Mode, Setup, StoredScript } from "../../lib/storage";
 import { Page } from "../Page";
 import { ReviewList } from "../ReviewList";
@@ -25,17 +26,13 @@ export function SetupScreen({
   const [myRole, setMyRole] = useState(initialSetup?.myRole ?? script.roles[0]);
   const [mode, setMode] = useState<Mode>(initialSetup?.mode ?? "read");
   const [advanceMode, setAdvanceMode] = useState<AdvanceMode>(initialSetup?.advanceMode ?? (micSupported() ? "silence" : "manual"));
-  const [voiceNote, setVoiceNote] = useState<string | null>(() =>
-    ttsSupported() ? null : "이 브라우저는 음성 읽기를 지원하지 않아요. 상대 대사는 화면으로만 보여요.",
-  );
+  // 준비가 끝나면 VoiceSetup 이 알려 준다 — 읽어 주는 목소리 표시를 바꾸기 위해서다.
+  const [engine, setEngineState] = useState<Engine>(getEngine);
 
-  useEffect(() => {
-    if (!ttsSupported()) return;
-    waitForVoices().then((v) => {
-      if (v.length === 0) setVoiceNote("한국어 음성이 없어서 기본 음성으로 읽어요.");
-      else if (isRemoteOnly()) setVoiceNote("이 기기엔 원격 음성만 있어서 대사가 브라우저 음성 서비스로 전달돼요.");
-    });
-  }, []);
+  // 음성 준비·안내는 VoiceSetup 이 맡는다. 여기서는 아예 읽어 줄 수 없는 경우만 알린다.
+  const voiceNote = ttsSupported()
+    ? null
+    : "이 브라우저는 음성 읽기를 지원하지 않아요. 상대 대사는 화면으로만 보여요.";
 
   const others = script.roles.filter((r) => r !== myRole);
   const dialogue = script.lines.filter((l) => l.type === "dialogue");
@@ -43,8 +40,9 @@ export function SetupScreen({
 
   function previewVoice() {
     unlockTts();
+    const voices = assignVoices(others);
     others.forEach((r, i) => {
-      setTimeout(() => void speak(`${r} 역이에요.`, ROLE_VOICE_PALETTE[i % ROLE_VOICE_PALETTE.length]), i * 1400);
+      setTimeout(() => void speak(`${r} 역이에요.`, voices[r]), i * 1400);
     });
   }
 
@@ -70,7 +68,7 @@ export function SetupScreen({
         <SettingRow
           icon="volume"
           title="읽어주는 목소리"
-          value={`기기 음성 · ${others.length > 0 ? others.join(", ") + (others.length > 1 ? "는 서로 다른 톤" : "") : "상대 없음"}`}
+          value={`${engine === "supertonic" ? "자연스러운 음성" : "기기 음성"} · ${others.length > 0 ? others.join(", ") + (others.length > 1 ? "는 서로 다른 목소리" : "") : "상대 없음"}`}
           onClick={previewVoice}
           action="들어보기"
         />
@@ -90,6 +88,7 @@ export function SetupScreen({
           />
         )}
         {voiceNote && <p className="text-[11.5px] text-ink-4 px-1">{voiceNote}</p>}
+        <VoiceSetup onEngineChange={setEngineState} />
       </div>
     </Card>
   );

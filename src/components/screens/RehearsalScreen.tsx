@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRehearsalRunner } from "../../hooks/useRehearsalRunner";
-import { ROLE_VOICE_PALETTE } from "../../lib/audio/tts";
+import { assignVoices } from "../../lib/audio/tts";
 import { progress, window as rehearsalWindow, type RehearsalState } from "../../lib/rehearsal/machine";
 import type { DialogueLine } from "../../lib/script/parse";
 import type { Setup, StoredScript } from "../../lib/storage";
@@ -12,8 +12,13 @@ import { Button, Icon, RoleName, StatusPill } from "../ui";
 import type { RunStats } from "./DoneScreen";
 
 export function useStyleFor(script: StoredScript, myRole: string) {
-  const others = useMemo(() => script.roles.filter((r) => r !== myRole), [script.roles, myRole]);
-  return (role: string) => ROLE_VOICE_PALETTE[Math.max(0, others.indexOf(role)) % ROLE_VOICE_PALETTE.length];
+  // 내 배역을 뺀 나머지에게 등장 순서대로 목소리를 준다. 같은 대본이면 늘 같은 배정이다.
+  const voices = useMemo(
+    () => assignVoices(script.roles.filter((r) => r !== myRole)),
+    [script.roles, myRole],
+  );
+  const fallback = useMemo(() => Object.values(voices)[0], [voices]);
+  return (role: string) => voices[role] ?? fallback;
 }
 
 export function useElapsed(state: RehearsalState) {
