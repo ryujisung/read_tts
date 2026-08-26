@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# onnxruntime wasm 런타임 — scripts/copy-ort.mjs 가 설치본에서 복사한다
+/public/ort
+
+# 조사·실험용 임시 파일
+/.scratch

@@ -1,8 +1,8 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { parseScript } from "../../lib/script/parse";
-import { extractPdfText } from "../../lib/script/pdf";
+import { ACCEPTED, extractText, OldHwpError, UnsupportedFileError } from "../../lib/script/extract";
+import { countLinesByRole, parseScript } from "../../lib/script/parse";
 import { SAMPLE_SCRIPT } from "../../lib/script/sample";
 import type { StoredScript } from "../../lib/storage";
 import { Page } from "../Page";
@@ -18,8 +18,24 @@ export function InputScreen({ initialRaw, onParsed }: { initialRaw: string; onPa
   const [fileError, setFileError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  // 배역에서 뺀 이름. 형식이 제각각이라 자동 판별이 늘 맞지는 않는다.
+  const [excluded, setExcluded] = useState<string[]>([]);
+
   const hints = useMemo(() => hint.split(/[,，\n]/).map((s) => s.trim()).filter(Boolean), [hint]);
-  const parsed = useMemo(() => parseScript(raw, { roleHints: hints }), [raw, hints]);
+  const parsed = useMemo(
+    () => parseScript(raw, { roleHints: hints, excludeRoles: excluded }),
+    [raw, hints, excluded],
+  );
+  // 뺀 이름을 되살리려면 원래 후보를 알아야 한다.
+  const allRoles = useMemo(() => parseScript(raw, { roleHints: hints }).roles, [raw, hints]);
+  const counts = useMemo(() => countLinesByRole(parseScript(raw, { roleHints: hints }).lines), [raw, hints]);
+  const ranked = useMemo(
+    () => [...allRoles].sort((a, b) => (counts.get(b) ?? 0) - (counts.get(a) ?? 0)),
+    [allRoles, counts],
+  );
+  const toggleRole = (r: string) =>
+    setExcluded((prev) => (prev.includes(r) ? prev.filter((x) => x !== r) : [...prev, r]));
+
   const dialogueCount = parsed.lines.filter((l) => l.type === "dialogue").length;
   const directionCount = parsed.lines.length - dialogueCount;
   const hasText = raw.trim().length > 0;
@@ -30,14 +46,21 @@ export function InputScreen({ initialRaw, onParsed }: { initialRaw: string; onPa
     setBusy(true);
     setFileError(null);
     try {
-      const text = file.type === "application/pdf" || /\.pdf$/i.test(file.name) ? await extractPdfText(file) : await file.text();
+      const text = await extractText(file);
       if (!text.trim()) setFileError("파일에서 글자를 못 읽었어요. 스캔본이면 텍스트를 붙여넣어 주세요.");
       else {
         setRaw(text);
+        setExcluded([]);
         setEntry("write");
       }
-    } catch {
-      setFileError("파일을 여는 데 실패했어요.");
+    } catch (e) {
+      if (e instanceof OldHwpError) {
+        setFileError("한글 97 이전 형식이에요. 한글에서 열어 다시 저장하거나 다른 이름으로 저장에서 hwp를 고르면 열려요.");
+      } else if (e instanceof UnsupportedFileError) {
+        setFileError(e.message);
+      } else {
+        setFileError("파일을 여는 데 실패했어요.");
+      }
     } finally {
       setBusy(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -68,26 +91,38 @@ export function InputScreen({ initialRaw, onParsed }: { initialRaw: string; onPa
           <p className="text-[12.5px] text-ink-sub">
             배역 {parsed.roles.length}명 · 대사 {dialogueCount}줄 · 지문 {directionCount}개
           </p>
+          <p className="text-[11.5px] text-ink-4">배역이 아닌 게 섞였으면 눌러서 빼세요. 뺀 것은 지문으로 읽어요.</p>
           <div className="flex flex-wrap gap-2">
-            {parsed.roles.map((r, i) => (
-              <span key={r} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gray-bg text-[13px] font-extrabold">
-                <span className={`w-2 h-2 rounded-full ${i === 0 ? "bg-blue" : "bg-partner-soft"}`} />
-                {r}
-                <span className="text-ink-4 font-semibold">{parsed.lines.filter((l) => l.type === "dialogue" && l.role === r).length}줄</span>
-              </span>
-            ))}
+            {ranked.map((r) => {
+              const off = excluded.includes(r);
+              return (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => toggleRole(r)}
+                  aria-pressed={!off}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[13px] font-extrabold transition-opacity ${
+                    off ? "bg-gray-bg text-ink-5 line-through opacity-60" : "bg-gray-bg"
+                  }`}
+                >
+                  <span className={`w-2 h-2 rounded-full ${off ? "bg-ink-5" : "bg-partner-soft"}`} />
+                  {r}
+                  <span className="text-ink-4 font-semibold">{counts.get(r) ?? 0}줄</span>
+                </button>
+              );
+            })}
           </div>
-          {!ready && (
-            <div className="rounded-xl bg-warn-bg p-3.5">
-              <p className="text-[13px] text-warn font-bold">배역을 충분히 못 찾았어요. 이름을 쉼표로 적어 주세요.</p>
-              <input
-                value={hint}
-                onChange={(e) => setHint(e.target.value)}
-                placeholder="예: 지수, 민준"
-                className="mt-2 w-full h-10 rounded-lg bg-surface border border-line px-3 text-[14px] focus:outline-none focus:border-blue"
-              />
-            </div>
-          )}
+          <div className={`rounded-xl p-3.5 ${ready ? "bg-gray-bg" : "bg-warn-bg"}`}>
+            <p className={`text-[13px] font-bold ${ready ? "text-ink-3" : "text-warn"}`}>
+              {ready ? "빠진 배역이 있으면 이름을 쉼표로 적어 주세요." : "배역을 충분히 못 찾았어요. 이름을 쉼표로 적어 주세요."}
+            </p>
+            <input
+              value={hint}
+              onChange={(e) => setHint(e.target.value)}
+              placeholder="예: 지수, 민준"
+              className="mt-2 w-full h-10 rounded-lg bg-surface border border-line px-3 text-[14px] focus:outline-none focus:border-blue"
+            />
+          </div>
           <Button size="lg" disabled={!ready} onClick={() => onParsed({ ...parsed, raw })}>
             배역 정하러 가기
           </Button>
@@ -118,9 +153,9 @@ export function InputScreen({ initialRaw, onParsed }: { initialRaw: string; onPa
               >
                 <Icon name="upload" size={22} className="text-blue" />
                 <span className="text-[14px] font-extrabold">{busy ? "읽는 중…" : "파일에서 열기"}</span>
-                <span className="text-[11.5px] text-ink-4">txt · pdf</span>
+                <span className="text-[11.5px] text-ink-4">hwp · pdf · docx · txt</span>
               </button>
-              <input ref={fileRef} type="file" accept=".txt,.pdf,text/plain,application/pdf" className="hidden" onChange={(e) => onPickFile(e.target.files?.[0])} />
+              <input ref={fileRef} type="file" accept={ACCEPTED} className="hidden" onChange={(e) => onPickFile(e.target.files?.[0])} />
               {fileError && <p className="text-[12.5px] text-red">{fileError}</p>}
               <OptionRow icon="clipboard" title="붙여넣기" sub="복사해둔 대본을 바로 넣어요" active={entry === "paste"} onClick={onPaste} />
               <OptionRow icon="pencil" title="직접 쓰기" sub="빈 칸에서 대본을 입력해요" active={entry === "write"} onClick={() => setEntry("write")} />
