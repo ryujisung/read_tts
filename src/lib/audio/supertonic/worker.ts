@@ -25,7 +25,7 @@ export type Backend = "webgpu" | "wasm";
 
 export type ToWorker =
   | { id: number; type: "load"; prefer?: Backend }
-  | { id: number; type: "synth"; text: string; preset: VoicePreset; speed: number; steps: number };
+  | { id: number; type: "synth"; text: string; preset: VoicePreset; speed: number; steps: number; gapSec: number };
 
 export type FromWorker =
   | { id: number; type: "progress"; ratio: number; loaded: number; total: number; cached: boolean }
@@ -35,6 +35,14 @@ export type FromWorker =
 
 const post = (m: FromWorker, transfer?: Transferable[]) =>
   (self as unknown as DedicatedWorkerGlobalScope).postMessage(m, transfer ?? []);
+
+/**
+ * 긴 대사는 문장 단위로 나뉘어 따로 합성된 뒤 이어 붙는다. 그 사이에 넣는 무음.
+ *
+ * 원래 값은 0.3초인데 대사 한가운데에 완전한 무음이 그만큼 들어가면 끊긴 것으로
+ * 들린다. 각 조각은 이미 문장 끝의 여운을 달고 끝나므로 여기서는 조금만 준다.
+ */
+const GAP_SEC = 0.1;
 
 let tts: TextToSpeech | null = null;
 let ready: Promise<void> | null = null;
@@ -116,10 +124,10 @@ async function styleFor(preset: VoicePreset): Promise<VoiceStyleTensors> {
   return s;
 }
 
-async function synth(text: string, preset: VoicePreset, speed: number, steps: number) {
+async function synth(text: string, preset: VoicePreset, speed: number, steps: number, gapSec = GAP_SEC) {
   if (!tts) throw new Error("음성 엔진이 준비되지 않았다");
   const style = await styleFor(preset);
-  const { wav, duration } = await tts.call(text, "ko", style, steps, speed);
+  const { wav, duration } = await tts.call(text, "ko", style, steps, speed, gapSec);
   const len = Math.min(wav.length, Math.floor(tts.sampleRate * duration[0]));
   // helper 가 배열을 돌려주기도 해서 여기서 확실히 Float32Array 로 만든다.
   const samples = Float32Array.from(wav.slice(0, len));
@@ -143,7 +151,7 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         await ready;
         return;
       }
-      const audio = await synth(msg.text, msg.preset, msg.speed, msg.steps);
+      const audio = await synth(msg.text, msg.preset, msg.speed, msg.steps, msg.gapSec);
       // 버퍼를 넘겨주면 복사가 없다.
       post({ id: msg.id, type: "audio", ...audio }, [audio.samples.buffer]);
     } catch (err) {

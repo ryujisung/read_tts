@@ -38,5 +38,8 @@ export function loadOnnx(
 
 export function loadVoiceStyle(voiceStylePaths: string[], verbose?: boolean): Promise<VoiceStyleTensors>;
 
+/** 샘플을 WAV 바이트로 만든다. 브라우저판은 ArrayBuffer 를 돌려준다. */
+export function writeWavFile(audioData: ArrayLike<number>, sampleRate: number): ArrayBuffer;
+
 export const AVAILABLE_LANGS: readonly string[];
 export function isValidLang(lang: string): boolean;

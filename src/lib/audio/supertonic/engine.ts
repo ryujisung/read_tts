@@ -30,6 +30,8 @@ export interface SynthOptions {
   speed?: number;
   /** 되돌리기 단계. 높을수록 좋고 느리다. 기본 8 */
   steps?: number;
+  /** 긴 대사가 나뉠 때 조각 사이에 넣는 무음(초). 기본 0.1 */
+  gapSec?: number;
 }
 
 let worker: Worker | null = null;
@@ -101,7 +103,7 @@ export function load(onProgress?: (p: LoadProgress) => void, prefer?: Backend) {
 const MAX_CACHED = 24;
 const audioCache = new Map<string, Promise<Synthesized>>();
 const keyOf = (text: string, preset: VoicePreset, o: SynthOptions) =>
-  `${preset}|${o.speed ?? 1.0}|${o.steps ?? 8}|${text}`;
+  `${preset}|${o.speed ?? 1.0}|${o.steps ?? 8}|${o.gapSec ?? 0.1}|${text}`;
 
 /** 대사 한 줄을 소리로 만든다. 같은 대사를 다시 청하면 만들어 둔 것을 준다. */
 export function synthesize(text: string, preset: VoicePreset, opts: SynthOptions = {}): Promise<Synthesized> {
@@ -122,6 +124,7 @@ export function synthesize(text: string, preset: VoicePreset, opts: SynthOptions
         preset,
         speed: opts.speed ?? 1.0,
         steps: opts.steps ?? 8,
+        gapSec: opts.gapSec ?? 0.1,
       }),
     )
     .catch((e) => {
