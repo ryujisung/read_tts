@@ -46,7 +46,7 @@ export interface SttCallbacks {
 
 const START_TIMEOUT_MS = 2500;
 
-export function startRecognition(cb: SttCallbacks): Listening {
+export function startRecognition(cb: SttCallbacks, continuous = true): Listening {
   const C = ctor();
   if (!C) {
     cb.onError("unavailable");
@@ -55,7 +55,8 @@ export function startRecognition(cb: SttCallbacks): Listening {
   const r = new C();
   r.lang = "ko-KR";
   r.interimResults = true;
-  r.continuous = true;
+  // 우리가 말 끝을 판단할 때는 계속 듣고, 브라우저에 맡길 때는 스스로 끊게 둔다.
+  r.continuous = continuous;
   r.maxAlternatives = 1;
   let text = "";
   let started = false;
@@ -112,6 +113,135 @@ export function startRecognition(cb: SttCallbacks): Listening {
       try {
         r.abort();
       } catch {}
+    },
+  };
+}
+
+
+// ─── 말이 끝나면 알아서 판정하기 ──────────────────────────────────
+
+import { startListening, type MicListener } from "./mic";
+import { DEFAULT_VAD, type VadEvent, type VadOptions } from "./vad";
+
+export interface AutoListening {
+  /** 다 말했는데 기다리기 싫을 때 — 지금까지 말한 것으로 확정한다 */
+  finish(): void;
+  abort(): void;
+}
+
+export interface AutoSttCallbacks {
+  onListening?: () => void;
+  /** 0~1 음량. 듣고 있다는 표시에 쓴다 */
+  onLevel?: (rms: number) => void;
+  onText: (text: string) => void;
+  onError: (reason: "unavailable" | "denied" | "no-speech" | "failed") => void;
+}
+
+/** 테스트에서 마이크와 인식기를 갈아 끼우기 위한 자리. */
+export interface AutoDeps {
+  startMic: (
+    opts: VadOptions,
+    cb: { onEvent: (e: VadEvent) => void; onLevel?: (n: number) => void },
+  ) => Promise<MicListener>;
+  startRec: (cb: SttCallbacks, continuous: boolean) => Listening;
+}
+
+const REAL_DEPS: AutoDeps = { startMic: startListening, startRec: startRecognition };
+
+/**
+ * 누르고 있지 않아도 된다 — 말이 끝나면 알아서 맞춰본다.
+ *
+ * 말 끝은 음량으로 본다(침묵 1.8초). 브라우저 인식기에 맡기면 끊는 시점을 정할 수
+ * 없어서, 대사 중간의 호흡에서 잘린다. 마이크를 따로 열 수 없는 기기에서는
+ * 어쩔 수 없이 인식기가 스스로 끊게 둔다.
+ *
+ * 마이크는 판정이 끝나면 바로 닫는다. 내 차례가 아닌데 켜져 있으면 안 된다.
+ */
+export function startAutoRecognition(cb: AutoSttCallbacks, deps: AutoDeps = REAL_DEPS): AutoListening {
+  let mic: MicListener | null = null;
+  let rec: Listening | null = null;
+  let done = false;
+
+  const closeMic = () => {
+    mic?.stop();
+    mic = null;
+  };
+
+  const settleText = (text: string) => {
+    if (done) return;
+    done = true;
+    closeMic();
+    const t = text.trim();
+    // 빈 결과를 성공으로 넘기면 대사를 말하지 않았는데 통과한 것이 된다.
+    if (t) cb.onText(t);
+    else cb.onError("no-speech");
+  };
+
+  const settleError = (reason: Parameters<AutoSttCallbacks["onError"]>[0]) => {
+    if (done) return;
+    done = true;
+    closeMic();
+    cb.onError(reason);
+  };
+
+  /**
+   * 우리가 말 끝을 판단하는 동안 인식기가 먼저 포기하면 조용히 다시 연다.
+   *
+   * 크롬은 5초쯤 조용하면 스스로 no-speech 를 던진다. 대사를 떠올리는 사이에
+   * 세션이 죽으면 말할 기회를 뺏는 셈이다. 진짜 끝은 침묵 감지가 정한다.
+   */
+  const openRec = (continuous: boolean) => {
+    rec = deps.startRec(
+      {
+        onStart: () => {
+          if (!done) cb.onListening?.();
+        },
+        onText: settleText,
+        onError: (reason) => {
+          if (done) return;
+          if (reason === "no-speech" && continuous) {
+            openRec(true);
+            return;
+          }
+          settleError(reason);
+        },
+      },
+      continuous,
+    );
+  };
+
+  void (async () => {
+    try {
+      mic = await deps.startMic(DEFAULT_VAD, {
+        onEvent: (e) => {
+          if (done) return;
+          // 말이 끝났거나 아무 말도 없었다 — 어느 쪽이든 인식기를 멈춰 결과를 받는다.
+          if (e === "speech_end" || e === "timeout") rec?.stop();
+        },
+        onLevel: (n) => {
+          if (!done) cb.onLevel?.(n);
+        },
+      });
+      if (done) {
+        closeMic();
+        return;
+      }
+      openRec(true);
+    } catch {
+      // 마이크를 따로 못 열면 인식기가 스스로 끊게 둔다.
+      if (!done) openRec(false);
+    }
+  })();
+
+  return {
+    finish() {
+      rec?.stop();
+    },
+    abort() {
+      done = true;
+      closeMic();
+      rec?.abort();
+      rec = null;
     },
   };
 }

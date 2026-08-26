@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRehearsalRunner } from "../../hooks/useRehearsalRunner";
-import { startRecognition, sttAvailable, type Listening } from "../../lib/audio/stt";
+import { startAutoRecognition, sttAvailable, type AutoListening } from "../../lib/audio/stt";
 import { compare } from "../../lib/quiz/match";
 import { progress, window as rehearsalWindow } from "../../lib/rehearsal/machine";
 import type { DialogueLine } from "../../lib/script/parse";
@@ -32,7 +32,7 @@ export function QuizScreen({ script, setup, onFinish, onExit }: { script: Stored
   const [listening, setListening] = useState(false);
   const [sttNote, setSttNote] = useState<string | null>(null);
   const missRef = useRef(0);
-  const recRef = useRef<Listening | null>(null);
+  const recRef = useRef<AutoListening | null>(null);
   const results = useRef<{ attempted: number; passed: number; pending: number }>({ attempted: 0, passed: 0, pending: 0 });
 
   const myLines = script.lines.filter((l): l is DialogueLine => l.type === "dialogue" && l.role === setup.myRole);
@@ -58,8 +58,10 @@ export function QuizScreen({ script, setup, onFinish, onExit }: { script: Stored
     setJudge(null);
     setTyped("");
     setListening(false);
+    setSttNote(null);
     missRef.current = 0;
   }, [lineKey]);
+
 
   const [pending, setPending] = useState(0);
   function goNext(passed: boolean | null) {
@@ -91,15 +93,18 @@ export function QuizScreen({ script, setup, onFinish, onExit }: { script: Stored
     setJudge({ kind: "retry", said: text });
   }
 
-  function holdStart() {
-    if (!isMe || listening) return;
-    setSttNote(null);
-    recRef.current = startRecognition({
-      onStart: () => setListening(true),
+  const submitRef = useRef(submit);
+  useEffect(() => {
+    submitRef.current = submit;
+  });
+
+  /** 내 차례가 되면 알아서 듣는다. 말이 끝나면(침묵 1.8초) 그대로 맞춰본다. */
+  const listen = useCallback(() => {
+    recRef.current = startAutoRecognition({
+      onListening: () => setListening(true),
       onText: (t) => {
         setListening(false);
-        if (t) submit(t);
-        else setSttNote("말소리를 못 알아들었어요. 다시 눌러 말하거나 입력하기를 써 주세요.");
+        submitRef.current(t);
       },
       onError: (reason) => {
         setListening(false);
@@ -108,15 +113,26 @@ export function QuizScreen({ script, setup, onFinish, onExit }: { script: Stored
             ? "이 브라우저에선 음성인식이 안 돼요. 입력하기로 진행해요."
             : reason === "denied"
               ? "마이크 권한이 없어요. 입력하기로 진행해요."
-              : "다시 눌러 말해 주세요.",
+              : reason === "no-speech"
+                ? "말소리를 못 알아들었어요. 다시 말하거나 입력하기를 써 주세요."
+                : "다시 말해 주세요.",
         );
         if (reason === "unavailable" || reason === "denied") setTyping(true);
       },
     });
-  }
-  function holdEnd() {
-    recRef.current?.stop();
-  }
+  }, []);
+
+  // 내 차례 동안만 마이크를 연다. 판정이 끝나거나 줄이 넘어가면 바로 닫는다.
+  const myTurnNow = isMe && !judge && !typing && sttAvailable();
+  useEffect(() => {
+    if (!myTurnNow) return;
+    listen();
+    return () => {
+      recRef.current?.abort();
+      recRef.current = null;
+    };
+  }, [myTurnNow, lineKey, listen]);
+
 
   const stage = (
     <div className="flex flex-col gap-3 md:gap-3.5 w-full md:max-w-[640px]">
@@ -174,7 +190,7 @@ export function QuizScreen({ script, setup, onFinish, onExit }: { script: Stored
               <Button type="submit" size="md">확인</Button>
             </form>
           )}
-          <p className="text-[11.5px] text-ink-4">여기까지가 글자예요. 말한 것을 글자로 바꿔 대본과만 맞춰봐요. {sttAvailable() && "말소리는 브라우저 음성 서비스로 가요."}</p>
+          <p className="text-[11.5px] text-ink-4">내 차례 동안 마이크가 켜져 있어요. 말한 것을 글자로 바꿔 대본과만 맞춰보고 바로 버려요. {sttAvailable() && "말소리는 브라우저 음성 서비스로 가요."}</p>
           {sttNote && <p className="text-[12px] text-red">{sttNote}</p>}
         </>
       )}
@@ -183,7 +199,7 @@ export function QuizScreen({ script, setup, onFinish, onExit }: { script: Stored
 
   const controls = idle ? (
     <div className="flex flex-col items-center gap-2.5">
-      <p className="text-[12.5px] text-ink-4">내 차례엔 대사가 가려져요. 마이크를 누르고 말한 뒤 떼면 맞춰봐요.</p>
+      <p className="text-[12.5px] text-ink-4">내 차례엔 대사가 가려지고 마이크가 켜져요. 말하면 알아서 맞춰봐요.</p>
       <Button size="lg" className="w-full md:w-[340px]" onClick={() => { markStart(); void runner.start(); }}>
         시작
       </Button>
@@ -191,17 +207,16 @@ export function QuizScreen({ script, setup, onFinish, onExit }: { script: Stored
   ) : isMe ? (
     <div className="flex flex-col items-center gap-2.5">
       <div className="flex items-center justify-center gap-3 w-full">
-        <Button variant="secondary" className="flex-1 md:w-36 md:flex-none" onClick={() => { setSaid(""); setJudge(null); }}>
+        <Button variant="secondary" className="flex-1 md:w-36 md:flex-none" onClick={() => { setSaid(""); setJudge(null); setSttNote(null); }}>
           다시
         </Button>
         <button
           type="button"
-          onPointerDown={holdStart}
-          onPointerUp={holdEnd}
-          onPointerLeave={holdEnd}
-          onPointerCancel={holdEnd}
-          aria-label="직접 말하기"
-          className={`w-[68px] h-[68px] rounded-full flex items-center justify-center text-white shadow-[0_8px_20px_rgba(10,121,251,0.25)] select-none touch-none ${listening ? "bg-blue-dark pulse-me" : "bg-blue"}`}
+          onClick={() => recRef.current?.finish()}
+          disabled={!listening}
+          aria-label="지금 확정"
+          title="다 말했으면 눌러서 바로 맞춰봐요"
+          className={`w-[68px] h-[68px] rounded-full flex items-center justify-center text-white shadow-[0_8px_20px_rgba(10,121,251,0.25)] select-none touch-none disabled:opacity-40 ${listening ? "bg-blue-dark pulse-me" : "bg-blue"}`}
         >
           <Icon name="mic" size={28} />
         </button>
@@ -210,7 +225,7 @@ export function QuizScreen({ script, setup, onFinish, onExit }: { script: Stored
         </Button>
       </div>
       <p className="text-[12px] font-bold text-ink-4">
-        누르고 말한 뒤 떼면 맞춰봐요 ·{" "}
+        {listening ? "말이 끝나면 알아서 맞춰봐요 · 다 말했으면 눌러도 돼요" : "말하면 알아서 맞춰봐요"} ·{" "}
         <button type="button" onClick={() => setTyping((v) => !v)} className="text-blue underline underline-offset-2">
           입력하기
         </button>
