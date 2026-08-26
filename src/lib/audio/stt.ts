@@ -40,6 +40,8 @@ export interface Listening {
 
 export interface SttCallbacks {
   onStart?: () => void;
+  /** 인식되는 대로. 말이 이어지는지 보는 데 쓴다 */
+  onInterim?: (text: string) => void;
   onText: (text: string) => void;
   onError: (reason: "unavailable" | "denied" | "no-speech" | "failed") => void;
 }
@@ -79,6 +81,7 @@ export function startRecognition(cb: SttCallbacks, continuous = true): Listening
     let s = "";
     for (let i = 0; i < e.results.length; i++) s += e.results[i][0].transcript;
     text = s;
+    cb.onInterim?.(s);
   };
   r.onerror = (e) => {
     if (finished) return;
@@ -120,9 +123,6 @@ export function startRecognition(cb: SttCallbacks, continuous = true): Listening
 
 // ─── 말이 끝나면 알아서 판정하기 ──────────────────────────────────
 
-import { startListening, type MicListener } from "./mic";
-import { DEFAULT_VAD, type VadEvent, type VadOptions } from "./vad";
-
 export interface AutoListening {
   /** 다 말했는데 기다리기 싫을 때 — 지금까지 말한 것으로 확정한다 */
   finish(): void;
@@ -131,107 +131,118 @@ export interface AutoListening {
 
 export interface AutoSttCallbacks {
   onListening?: () => void;
-  /** 0~1 음량. 듣고 있다는 표시에 쓴다 */
-  onLevel?: (rms: number) => void;
+  /** 인식되는 대로 화면에 보여 주기 위한 것 */
+  onInterim?: (text: string) => void;
   onText: (text: string) => void;
   onError: (reason: "unavailable" | "denied" | "no-speech" | "failed") => void;
 }
 
-/** 테스트에서 마이크와 인식기를 갈아 끼우기 위한 자리. */
+/** 테스트에서 인식기를 갈아 끼우기 위한 자리. */
 export interface AutoDeps {
-  startMic: (
-    opts: VadOptions,
-    cb: { onEvent: (e: VadEvent) => void; onLevel?: (n: number) => void },
-  ) => Promise<MicListener>;
   startRec: (cb: SttCallbacks, continuous: boolean) => Listening;
 }
 
-const REAL_DEPS: AutoDeps = { startMic: startListening, startRec: startRecognition };
+const REAL_DEPS: AutoDeps = { startRec: startRecognition };
+
+export interface AutoOptions {
+  /** 인식 결과가 이만큼 안 바뀌면 말이 끝난 것으로 본다 */
+  silenceMs?: number;
+  /** 한 마디도 못 알아들은 채 이만큼 지나면 포기한다 */
+  maxListenMs?: number;
+}
 
 /**
  * 누르고 있지 않아도 된다 — 말이 끝나면 알아서 맞춰본다.
  *
- * 말 끝은 음량으로 본다(침묵 1.8초). 브라우저 인식기에 맡기면 끊는 시점을 정할 수
- * 없어서, 대사 중간의 호흡에서 잘린다. 마이크를 따로 열 수 없는 기기에서는
- * 어쩔 수 없이 인식기가 스스로 끊게 둔다.
+ * 말 끝은 **인식 결과가 더 이상 늘지 않는 것**으로 본다.
+ * 처음에는 마이크를 따로 열어 음량으로 판단했는데, 그러면 getUserMedia 와
+ * SpeechRecognition 이 마이크를 동시에 잡으려다 인식기 쪽이 소리를 전혀 받지 못했다.
+ * (증상: 말을 해도 no-speech 만 반복) 그래서 마이크를 쓰는 곳을 하나로 줄였다.
  *
- * 마이크는 판정이 끝나면 바로 닫는다. 내 차례가 아닌데 켜져 있으면 안 된다.
+ * 브라우저 인식기에 끊는 것까지 맡기지는 않는다 — 크롬은 5초쯤 조용하면 스스로
+ * 세션을 닫아 대사 중간의 호흡에서 잘린다. 끊는 시점은 우리가 정한다.
  */
-export function startAutoRecognition(cb: AutoSttCallbacks, deps: AutoDeps = REAL_DEPS): AutoListening {
-  let mic: MicListener | null = null;
+export function startAutoRecognition(
+  cb: AutoSttCallbacks,
+  deps: AutoDeps = REAL_DEPS,
+  opts: AutoOptions = {},
+): AutoListening {
+  const silenceMs = opts.silenceMs ?? 1800;
+  const maxListenMs = opts.maxListenMs ?? 60000;
+
   let rec: Listening | null = null;
   let done = false;
+  /** 인식기를 다시 열면 결과가 초기화되므로 우리가 이어 붙인다 */
+  let carried = "";
+  let silenceTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const closeMic = () => {
-    mic?.stop();
-    mic = null;
+  const clearSilence = () => {
+    if (silenceTimer) clearTimeout(silenceTimer);
+    silenceTimer = null;
   };
 
-  const settleText = (text: string) => {
+  const overall = setTimeout(() => {
+    if (done) return;
+    // 여기까지 왔는데 아무것도 못 알아들었다면 더 기다릴 이유가 없다.
+    if (carried.trim()) rec?.stop();
+    else settleError("no-speech");
+  }, maxListenMs);
+
+  const cleanup = () => {
+    clearSilence();
+    clearTimeout(overall);
+  };
+
+  function settleText(text: string) {
     if (done) return;
     done = true;
-    closeMic();
-    const t = text.trim();
+    cleanup();
+    const t = `${carried} ${text}`.trim();
     // 빈 결과를 성공으로 넘기면 대사를 말하지 않았는데 통과한 것이 된다.
     if (t) cb.onText(t);
     else cb.onError("no-speech");
-  };
+  }
 
-  const settleError = (reason: Parameters<AutoSttCallbacks["onError"]>[0]) => {
+  function settleError(reason: Parameters<AutoSttCallbacks["onError"]>[0]) {
     if (done) return;
     done = true;
-    closeMic();
+    cleanup();
     cb.onError(reason);
-  };
+  }
 
-  /**
-   * 우리가 말 끝을 판단하는 동안 인식기가 먼저 포기하면 조용히 다시 연다.
-   *
-   * 크롬은 5초쯤 조용하면 스스로 no-speech 를 던진다. 대사를 떠올리는 사이에
-   * 세션이 죽으면 말할 기회를 뺏는 셈이다. 진짜 끝은 침묵 감지가 정한다.
-   */
-  const openRec = (continuous: boolean) => {
+  const openRec = (first: boolean) => {
+    let session = "";
     rec = deps.startRec(
       {
         onStart: () => {
-          if (!done) cb.onListening?.();
+          if (!done && first) cb.onListening?.();
+        },
+        onInterim: (t) => {
+          if (done) return;
+          session = t;
+          cb.onInterim?.(`${carried} ${t}`.trim());
+          // 말이 이어지는 동안에는 끝을 미룬다.
+          clearSilence();
+          silenceTimer = setTimeout(() => rec?.stop(), silenceMs);
         },
         onText: settleText,
         onError: (reason) => {
           if (done) return;
-          if (reason === "no-speech" && continuous) {
-            openRec(true);
+          if (reason === "no-speech") {
+            // 크롬이 조급하게 닫은 것뿐이다. 여태 들은 것을 안고 다시 연다.
+            carried = `${carried} ${session}`.trim();
+            clearSilence();
+            openRec(false);
             return;
           }
           settleError(reason);
         },
       },
-      continuous,
+      true,
     );
   };
 
-  void (async () => {
-    try {
-      mic = await deps.startMic(DEFAULT_VAD, {
-        onEvent: (e) => {
-          if (done) return;
-          // 말이 끝났거나 아무 말도 없었다 — 어느 쪽이든 인식기를 멈춰 결과를 받는다.
-          if (e === "speech_end" || e === "timeout") rec?.stop();
-        },
-        onLevel: (n) => {
-          if (!done) cb.onLevel?.(n);
-        },
-      });
-      if (done) {
-        closeMic();
-        return;
-      }
-      openRec(true);
-    } catch {
-      // 마이크를 따로 못 열면 인식기가 스스로 끊게 둔다.
-      if (!done) openRec(false);
-    }
-  })();
+  openRec(true);
 
   return {
     finish() {
@@ -239,7 +250,7 @@ export function startAutoRecognition(cb: AutoSttCallbacks, deps: AutoDeps = REAL
     },
     abort() {
       done = true;
-      closeMic();
+      cleanup();
       rec?.abort();
       rec = null;
     },

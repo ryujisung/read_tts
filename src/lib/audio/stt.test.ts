@@ -1,226 +1,189 @@
-import { describe, expect, it, vi } from "vitest";
-import { startAutoRecognition, type AutoDeps } from "./stt";
-import type { VadEvent } from "./vad";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { startAutoRecognition, type AutoDeps, type SttCallbacks } from "./stt";
 
-/** 마이크와 음성인식을 가짜로 세워 두고, 말이 끝났을 때의 흐름만 본다. */
-function harness(opts: { micFails?: boolean } = {}) {
-  let emit: ((e: VadEvent) => void) | null = null;
-  let level: ((n: number) => void) | undefined;
-  const micStop = vi.fn();
-  const recStop = vi.fn();
-  const recAbort = vi.fn();
-  let finishRec: ((text: string) => void) | null = null;
-  let failRec: ((r: "unavailable" | "denied" | "no-speech" | "failed") => void) | null = null;
-  let continuousUsed: boolean | null = null;
+/**
+ * 인식기를 가짜로 세워 두고 말 끝 판단만 본다.
+ * 마이크는 인식기 안에만 있으므로 여기서 흉내 낼 것이 없다.
+ */
+function harness() {
+  let live: SttCallbacks | null = null;
   let opened = 0;
+  const stop = vi.fn(() => {
+    // 실제 인식기는 stop 하면 지금까지의 결과를 onText 로 돌려준다.
+    live?.onText(lastInterim);
+  });
+  const abort = vi.fn();
+  let lastInterim = "";
 
   const deps: AutoDeps = {
-    startMic: async (_vad, cb) => {
-      if (opts.micFails) throw new Error("마이크 없음");
-      emit = cb.onEvent;
-      level = cb.onLevel;
-      return { stop: micStop };
-    },
-    startRec: (cb, continuous) => {
+    startRec: (cb) => {
       opened++;
-      continuousUsed = continuous;
-      finishRec = (t) => cb.onText(t);
-      failRec = (r) => cb.onError(r);
+      live = cb;
+      lastInterim = "";
       queueMicrotask(() => cb.onStart?.());
-      return { stop: recStop, abort: recAbort };
+      return { stop, abort };
     },
   };
 
   return {
     deps,
-    micStop,
-    recStop,
-    recAbort,
-    get continuousUsed() {
-      return continuousUsed;
-    },
+    stop,
+    abort,
     get opened() {
       return opened;
     },
-    speechEnd: () => emit?.("speech_end"),
-    timeout: () => emit?.("timeout"),
-    feedLevel: (n: number) => level?.(n),
-    finishRec: (t: string) => finishRec?.(t),
-    failRec: (r: "unavailable" | "denied" | "no-speech" | "failed") => failRec?.(r),
+    /** 인식되는 중 */
+    hear(text: string) {
+      lastInterim = text;
+      live?.onInterim?.(text);
+    },
+    fail(reason: "unavailable" | "denied" | "no-speech" | "failed") {
+      live?.onError(reason);
+    },
   };
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
+beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+afterEach(() => vi.useRealTimers());
+
 describe("startAutoRecognition", () => {
-  it("말이 끝나면 알아서 인식을 멈추고 텍스트를 넘긴다", async () => {
+  it("말이 멈추고 1.8초가 지나면 알아서 확정한다", async () => {
     const h = harness();
     const onText = vi.fn();
     startAutoRecognition({ onText, onError: vi.fn() }, h.deps);
     await tick();
 
-    h.speechEnd();
-    expect(h.recStop).toHaveBeenCalled();
+    h.hear("여기 있을 줄 알았어");
+    expect(onText).not.toHaveBeenCalled();
 
-    h.finishRec("여기 있을 줄 알았어");
+    vi.advanceTimersByTime(1800);
     expect(onText).toHaveBeenCalledWith("여기 있을 줄 알았어");
   });
 
-  it("말이 끝나면 마이크를 닫는다 — 내 차례가 아닌데 켜져 있으면 안 된다", async () => {
+  it("말이 이어지는 동안에는 끝내지 않는다", async () => {
     const h = harness();
-    startAutoRecognition({ onText: vi.fn(), onError: vi.fn() }, h.deps);
+    const onText = vi.fn();
+    startAutoRecognition({ onText, onError: vi.fn() }, h.deps);
     await tick();
-    h.speechEnd();
-    h.finishRec("어떻게 알았어");
-    expect(h.micStop).toHaveBeenCalled();
+
+    h.hear("달라지지");
+    vi.advanceTimersByTime(1500);
+    h.hear("달라지지 나는 알잖아");
+    vi.advanceTimersByTime(1500);
+    expect(onText).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(300);
+    expect(onText).toHaveBeenCalledWith("달라지지 나는 알잖아");
   });
 
-  it("아무 말도 없이 시간이 지나면 못 알아들은 것으로 알린다", async () => {
-    const h = harness();
-    const onError = vi.fn();
-    startAutoRecognition({ onText: vi.fn(), onError }, h.deps);
-    await tick();
-    h.timeout();
-    h.finishRec("");
-    expect(onError).toHaveBeenCalledWith("no-speech");
-  });
-
-  it("빈 텍스트가 오면 성공으로 넘기지 않는다", async () => {
+  it("말을 시작하지 않았으면 1.8초가 지나도 끝내지 않는다", async () => {
+    // 대사를 떠올리는 시간을 뺏으면 안 된다.
     const h = harness();
     const onText = vi.fn();
     const onError = vi.fn();
     startAutoRecognition({ onText, onError }, h.deps);
     await tick();
-    h.speechEnd();
-    h.finishRec("   ");
+
+    vi.advanceTimersByTime(10000);
     expect(onText).not.toHaveBeenCalled();
-    expect(onError).toHaveBeenCalledWith("no-speech");
+    expect(onError).not.toHaveBeenCalled();
   });
 
-  it("마이크를 못 열면 브라우저가 알아서 끊는 방식으로 떨어진다", async () => {
-    const h = harness({ micFails: true });
+  it("크롬이 조급하게 닫으면 조용히 다시 연다", async () => {
+    const h = harness();
+    const onError = vi.fn();
+    startAutoRecognition({ onText: vi.fn(), onError }, h.deps);
+    await tick();
+    expect(h.opened).toBe(1);
+
+    h.fail("no-speech");
+    expect(onError).not.toHaveBeenCalled();
+    expect(h.opened).toBe(2);
+  });
+
+  it("다시 열려도 여태 들은 말을 잃지 않는다", async () => {
+    // 인식기를 다시 열면 그쪽 결과는 초기화된다. 이어 붙이지 않으면 앞부분이 날아간다.
+    const h = harness();
     const onText = vi.fn();
     startAutoRecognition({ onText, onError: vi.fn() }, h.deps);
     await tick();
 
-    // 이 경우엔 우리가 끊지 않는다 — 인식기가 스스로 끝낸다
-    expect(h.continuousUsed).toBe(false);
-    h.finishRec("모레");
-    expect(onText).toHaveBeenCalledWith("모레");
-  });
-
-  it("마이크가 열렸을 때는 우리가 끊으므로 계속 듣기로 연다", async () => {
-    const h = harness();
-    startAutoRecognition({ onText: vi.fn(), onError: vi.fn() }, h.deps);
+    h.hear("달라지지");
+    h.fail("no-speech");
     await tick();
-    expect(h.continuousUsed).toBe(true);
+
+    h.hear("나는 알잖아");
+    vi.advanceTimersByTime(1800);
+    expect(onText).toHaveBeenCalledWith("달라지지 나는 알잖아");
   });
 
-  it("직접 확정하면 그 자리에서 인식을 멈춘다", async () => {
+  it("한 마디도 못 알아들은 채 오래 지나면 포기한다", async () => {
     const h = harness();
-    const onText = vi.fn();
-    const handle = startAutoRecognition({ onText, onError: vi.fn() }, h.deps);
+    const onError = vi.fn();
+    startAutoRecognition({ onText: vi.fn(), onError }, h.deps, { maxListenMs: 5000 });
     await tick();
-    handle.finish();
-    expect(h.recStop).toHaveBeenCalled();
-    h.finishRec("고마워");
-    expect(onText).toHaveBeenCalledWith("고마워");
+
+    vi.advanceTimersByTime(5000);
+    expect(onError).toHaveBeenCalledWith("no-speech");
   });
 
-  it("줄이 바뀌어 중단하면 마이크를 닫고 아무것도 알리지 않는다", async () => {
+  it("빈 결과를 통과로 넘기지 않는다", async () => {
     const h = harness();
     const onText = vi.fn();
     const onError = vi.fn();
     const handle = startAutoRecognition({ onText, onError }, h.deps);
     await tick();
-    handle.abort();
-    expect(h.micStop).toHaveBeenCalled();
-    expect(h.recAbort).toHaveBeenCalled();
 
-    h.finishRec("늦게 온 결과");
+    handle.finish();
+    expect(onText).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith("no-speech");
+  });
+
+  it("직접 확정하면 그 자리에서 끝낸다", async () => {
+    const h = harness();
+    const onText = vi.fn();
+    const handle = startAutoRecognition({ onText, onError: vi.fn() }, h.deps);
+    await tick();
+
+    h.hear("고마워");
+    handle.finish();
+    expect(onText).toHaveBeenCalledWith("고마워");
+  });
+
+  it("인식이 거부되면 그대로 알린다", async () => {
+    const h = harness();
+    const onError = vi.fn();
+    startAutoRecognition({ onText: vi.fn(), onError }, h.deps);
+    await tick();
+
+    h.fail("denied");
+    expect(onError).toHaveBeenCalledWith("denied");
+  });
+
+  it("줄이 바뀌어 중단하면 아무것도 알리지 않는다", async () => {
+    const h = harness();
+    const onText = vi.fn();
+    const onError = vi.fn();
+    const handle = startAutoRecognition({ onText, onError }, h.deps);
+    await tick();
+
+    handle.abort();
+    expect(h.abort).toHaveBeenCalled();
+
+    vi.advanceTimersByTime(60000);
     expect(onText).not.toHaveBeenCalled();
     expect(onError).not.toHaveBeenCalled();
   });
 
-  it("인식이 거부되면 그대로 알리고 마이크를 닫는다", async () => {
+  it("인식되는 대로 화면에 흘려보낸다", async () => {
     const h = harness();
-    const onError = vi.fn();
-    startAutoRecognition({ onText: vi.fn(), onError }, h.deps);
-    await tick();
-    h.failRec("denied");
-    expect(onError).toHaveBeenCalledWith("denied");
-    expect(h.micStop).toHaveBeenCalled();
-  });
-
-  it("음량을 그대로 흘려보낸다 — 듣고 있다는 표시에 쓴다", async () => {
-    const h = harness();
-    const onLevel = vi.fn();
-    startAutoRecognition({ onText: vi.fn(), onError: vi.fn(), onLevel }, h.deps);
-    await tick();
-    h.feedLevel(0.42);
-    expect(onLevel).toHaveBeenCalledWith(0.42);
-  });
-});
-
-describe("인식기가 조급하게 끊을 때", () => {
-  it("아직 말도 안 했는데 no-speech 가 오면 조용히 다시 연다", async () => {
-    // 크롬은 5초쯤 조용하면 스스로 no-speech 를 던진다. 말할 시간을 뺏으면 안 된다.
-    const h = harness();
-    const onError = vi.fn();
-    const onText = vi.fn();
-    startAutoRecognition({ onText, onError }, h.deps);
-    await tick();
-    expect(h.opened).toBe(1);
-
-    h.failRec("no-speech");
+    const onInterim = vi.fn();
+    startAutoRecognition({ onText: vi.fn(), onError: vi.fn(), onInterim }, h.deps);
     await tick();
 
-    expect(onError).not.toHaveBeenCalled();
-    expect(h.opened).toBe(2);
-  });
-
-  it("다시 연 뒤에도 말이 끝나면 그대로 판정한다", async () => {
-    const h = harness();
-    const onText = vi.fn();
-    startAutoRecognition({ onText, onError: vi.fn() }, h.deps);
-    await tick();
-    h.failRec("no-speech");
-    await tick();
-
-    h.speechEnd();
-    h.finishRec("여기 있을 줄 알았어");
-    expect(onText).toHaveBeenCalledWith("여기 있을 줄 알았어");
-  });
-
-  it("우리가 시간 초과로 끝낼 때는 못 알아들은 것으로 알린다", async () => {
-    const h = harness();
-    const onError = vi.fn();
-    startAutoRecognition({ onText: vi.fn(), onError }, h.deps);
-    await tick();
-    h.timeout();
-    h.finishRec("");
-    expect(onError).toHaveBeenCalledWith("no-speech");
-  });
-
-  it("마이크가 없어 브라우저에 맡긴 경우엔 다시 열지 않는다", async () => {
-    // 이때는 인식기의 판단이 곧 말 끝이라 되살리면 끝나지 않는다.
-    const h = harness({ micFails: true });
-    const onError = vi.fn();
-    startAutoRecognition({ onText: vi.fn(), onError }, h.deps);
-    await tick();
-    h.failRec("no-speech");
-    await tick();
-    expect(h.opened).toBe(1);
-    expect(onError).toHaveBeenCalledWith("no-speech");
-  });
-
-  it("중단한 뒤에는 다시 열지 않는다", async () => {
-    const h = harness();
-    const handle = startAutoRecognition({ onText: vi.fn(), onError: vi.fn() }, h.deps);
-    await tick();
-    handle.abort();
-    h.failRec("no-speech");
-    await tick();
-    expect(h.opened).toBe(1);
+    h.hear("여기 있을");
+    expect(onInterim).toHaveBeenCalledWith("여기 있을");
   });
 });
