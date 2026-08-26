@@ -10,7 +10,9 @@
 - 스택: Next.js 16(App Router) + TypeScript + Tailwind v4. 순수 로직은 vitest.
 - 폰 세로 기본, 데스크톱은 가운데 좁은 셸(max 480px). 앱 전환을 염두에 둔 SPA 구조(화면 = phase 상태).
 - 대본 본문은 **브라우저 안에서만** 다루고 `sessionStorage`까지만 저장한다. 서버·로그에 대본이 남지 않는다.
-- 상대 대사 음성은 **기기 내장 TTS(`speechSynthesis`)가 기본**. 유료 TTS/LLM은 서버에 키가 있을 때만 켜지는 선택 경로이고, 키가 없으면 조용히 기기 음성으로 폴백한다. 개발 중 유료 API를 호출하지 않는다.
+- 상대 대사 음성은 **브라우저에서 도는 Supertonic 3 가 기본**. 모델은 HuggingFace CDN 에서 받아 Cache API 에 둔다. 서버가 없어 대사가 기기 밖으로 나가지 않는다.
+  모델을 받기 전이거나 받을 수 없으면 **기기 내장 TTS(`speechSynthesis`)로 폴백**한다. 유료 API 는 호출하지 않는다.
+  실행 장치에 따라 가중치가 다르다 — WebGPU 에는 fp32(380MB), WebAssembly 에는 int8(138MB). int8 은 WebGPU 에서 진폭이 터져 못 쓴다.
 - 내 차례 넘김은 **마이크 음량 기반 침묵 감지**(오디오가 밖으로 나가지 않음) + 수동 버튼. STT는 쓰지 않는다.
 - 연기를 평가·채점하지 않는다. 화면 문구는 기능 설명에 한정한다.
 
@@ -33,14 +35,15 @@
 - `src/lib/script/parse.ts` — 대본 텍스트 → `{ roles, lines }`. 지원 형식: `이름: 대사`, `이름 대사`(알려진 배역), 블록형(`이름` 한 줄 + 다음 줄 대사), `(지문)`·`[지문]`.
 - `src/lib/rehearsal/machine.ts` — 순수 상태머신. `idle → ai | me → … → done`, `paused`. 지문은 화면에만 보이고 진행에서는 건너뛴다.
 - `src/lib/audio/vad.ts` — RMS 샘플을 받아 `speech_start / speech_end / timeout`을 내는 순수 침묵 감지기.
-- `src/lib/audio/tts.ts` — `speechSynthesis` 래퍼. 배역별 rate/pitch 팔레트, iOS 언락, 괄호 지문 제거.
+- `src/lib/audio/tts.ts` — 두 엔진(Supertonic·기기 음성)의 파사드. 배역별 목소리 배정, 한국어 음성 품질 정렬, iOS 언락, 괄호 지문 제거, 다음 대사 미리 합성.
+- `src/lib/audio/supertonic/` — 브라우저 신경망 음성. `engine.ts`(장치·가중치 선택과 합성), `cache.ts`(모델 캐시), `play.ts`(재생과 진폭 안전장치), `helper.js`(원본 런타임 벤더링).
 - `src/lib/audio/mic.ts` — getUserMedia → AnalyserNode → RMS만 뽑아 감지기에 넣는다. 녹음·전송 없음.
 - `src/lib/script/pdf.ts` — pdf.js로 브라우저 안에서 텍스트 추출(워커는 `public/pdf.worker.min.mjs`).
 - `src/lib/storage.ts` — `sessionStorage` 저장/복원.
 - `src/hooks/useRehearsalRunner.ts` — 상태머신 + TTS + 마이크를 잇는 러너. 상태가 바뀌면 진행 중인 TTS·마이크를 항상 정리한다.
 - `src/components/App.tsx` — phase 라우터. `screens/`에 화면 4개.
 
-유료 TTS/LLM 경로(`/api/tts` 등)는 v1에 넣지 않았다 — 키가 생기고 필요해지면 그때 붙인다.
+유료 TTS/LLM 경로(`/api/tts` 등)는 넣지 않았다. 서버 GPU 도 필요 없었다 — Supertonic 은 CPU 에서도 실시간보다 빠르고 WebGPU 에서는 RTF 0.28 이다.
 
 ## v2 후보 (v1에서 뺀 것)
 
