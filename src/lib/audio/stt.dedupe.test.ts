@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { startRecognition } from "./stt";
+import { mergeTranscripts, startRecognition } from "./stt";
 
 type Result = { transcript: string; isFinal: boolean };
 
@@ -56,6 +56,26 @@ describe("startRecognition — 안드로이드 누적 중간 결과", () => {
     ]);
     l.stop();
     expect(got).toEqual(["너", "너 맨날", "너 맨날 그러잖아", "FINAL:너 맨날 그러잖아"]);
+  });
+
+  it("확정 항목까지 누적으로 오는 안드로이드도 겹치지 않는다", () => {
+    const got: string[] = [];
+    const l = startRecognition({ onText: (t) => got.push(t), onError: () => {} });
+    const r = FakeRecognition.last!;
+    r.emit([
+      { transcript: "너", isFinal: true },
+      { transcript: "너맨날", isFinal: true },
+      { transcript: "너 맨날 그러잖아", isFinal: false },
+    ]);
+    l.stop();
+    expect(got).toEqual(["너 맨날 그러잖아"]);
+  });
+
+  it("mergeTranscripts — 조각은 잇고 누적은 갈아 끼운다", () => {
+    expect(mergeTranscripts(["너 맨날", "그러잖아"])).toBe("너 맨날 그러잖아");
+    expect(mergeTranscripts(["너", "너맨날", "너맨날그러잖아"])).toBe("너맨날그러잖아");
+    expect(mergeTranscripts(["너 맨날 그러잖아", "너"])).toBe("너 맨날 그러잖아");
+    expect(mergeTranscripts(["", "  ", "가자"])).toBe("가자");
   });
 
   it("확정된 항목이 여러 개면 그것들만 이어 붙인다 (데스크톱 연속 인식)", () => {
