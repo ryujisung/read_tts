@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { micSupported } from "../../lib/audio/mic";
 import { sttAvailable } from "../../lib/audio/stt";
-import { assignVoices, getEngine, speak, ttsSupported, unlockTts, type Engine } from "../../lib/audio/tts";
+import { VOICE_PRESETS, type VoicePreset } from "../../lib/audio/supertonic/models";
+import { assignVoices, getEngine, speak, ttsSupported, unlockTts, type Engine, type VoiceChoices } from "../../lib/audio/tts";
 import { VoiceSetup } from "../VoiceSetup";
 import type { AdvanceMode, Mode, Setup, StoredScript } from "../../lib/storage";
 import { Page } from "../Page";
@@ -28,6 +29,9 @@ export function SetupScreen({
   const [advanceMode, setAdvanceMode] = useState<AdvanceMode>(initialSetup?.advanceMode ?? (micSupported() ? "silence" : "manual"));
   // 준비가 끝나면 VoiceSetup 이 알려 준다 — 읽어 주는 목소리 표시를 바꾸기 위해서다.
   const [engine, setEngineState] = useState<Engine>(getEngine);
+  // 이름으로 성별을 짚는 것은 반드시 틀리는 이름이 나온다. 사람이 고친 것을 여기 담는다.
+  const [voices, setVoices] = useState<VoiceChoices>(initialSetup?.voices ?? {});
+  const [picking, setPicking] = useState(false);
 
   // 음성 준비·안내는 VoiceSetup 이 맡는다. 여기서는 아예 읽어 줄 수 없는 경우만 알린다.
   const voiceNote = ttsSupported()
@@ -38,13 +42,25 @@ export function SetupScreen({
   const dialogue = script.lines.filter((l) => l.type === "dialogue");
   const count = (r: string) => dialogue.filter((l) => l.role === r).length;
 
+  // 이름으로 짚은 것 위에 사람이 고른 것을 얹은 최종 배정. 화면과 연습이 같은 것을 쓴다.
+  const assigned = assignVoices(others, voices);
+
   function previewVoice() {
     unlockTts();
-    const voices = assignVoices(others);
     // 배역이 마흔 명 넘는 대본도 있다. 다 들려주면 1분이 넘으므로 앞의 몇만 들려준다.
     others.slice(0, 4).forEach((r, i) => {
-      setTimeout(() => void speak(`${r} 역이에요.`, voices[r]), i * 1400);
+      setTimeout(() => void speak(`${r} 역이에요.`, assigned[r]), i * 1400);
     });
+  }
+
+  function previewOne(role: string) {
+    unlockTts();
+    void speak(`${role} 역이에요.`, assigned[role]);
+  }
+
+  /** 프리셋에 든 정보는 성별뿐이다. 아는 만큼만 적는다. */
+  function presetLabel(p: VoicePreset): string {
+    return `${p.startsWith("F") ? "여성" : "남성"} ${p.slice(1)}`;
   }
 
   /**
@@ -87,9 +103,54 @@ export function SetupScreen({
           icon="volume"
           title="읽어주는 목소리"
           value={`${engine === "supertonic" ? "자연스러운 음성" : "기기 음성"} · ${voiceSummary(others)}`}
-          onClick={previewVoice}
-          action="들어보기"
+          onClick={() => setPicking(!picking)}
+          action={picking ? "닫기" : "고르기"}
         />
+        {picking && others.length > 0 && (
+          <div className="rounded-xl bg-gray-bg p-2 flex flex-col gap-2">
+            <p className="text-[11.5px] text-ink-4 px-1.5 leading-relaxed">
+              이름을 보고 골라 둔 목소리예요. 안 맞으면 바꾸세요.
+            </p>
+            {/* 배역이 마흔 명 넘는 대본이 있다. 화면을 밀어내지 않게 안에서 굴린다. */}
+            <div className="flex flex-col max-h-[240px] overflow-y-auto">
+              {others.map((r) => (
+                <div key={r} className="flex items-center gap-2 px-1.5 py-1">
+                  <span className="flex-1 min-w-0 truncate text-[13px] font-bold">{r}</span>
+                  <select
+                    value={assigned[r].preset}
+                    onChange={(e) => setVoices({ ...voices, [r]: e.target.value as VoicePreset })}
+                    aria-label={`${r} 목소리`}
+                    className="h-8 rounded-lg bg-surface border border-line px-2 text-[12.5px] font-semibold focus:outline-none focus:border-blue"
+                  >
+                    {VOICE_PRESETS.map((p) => (
+                      <option key={p} value={p}>
+                        {presetLabel(p)}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => previewOne(r)}
+                    aria-label={`${r} 목소리 들어보기`}
+                    className="w-8 h-8 shrink-0 grid place-items-center rounded-lg bg-surface border border-line active:bg-line"
+                  >
+                    <Icon name="volume" size={15} className="text-ink-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center justify-between px-1.5">
+              <button type="button" onClick={previewVoice} className="text-[12px] font-bold text-blue">
+                앞 배역 들어보기
+              </button>
+              {Object.keys(voices).length > 0 && (
+                <button type="button" onClick={() => setVoices({})} className="text-[12px] font-bold text-ink-4">
+                  고른 것 지우기
+                </button>
+              )}
+            </div>
+          </div>
+        )}
         {mode === "read" ? (
           <SettingRow
             icon="timer"
@@ -111,7 +172,12 @@ export function SetupScreen({
     </Card>
   );
 
-  const start = () => onStart({ myRole, start: 0, end: script.lines.length - 1, mode, advanceMode });
+  const start = () => {
+    // 내 배역을 바꾸면 예전에 고른 것이 남는다. 지금 상대인 배역만 남겨 둔다.
+    const kept: VoiceChoices = {};
+    for (const r of others) if (voices[r]) kept[r] = voices[r];
+    onStart({ myRole, start: 0, end: script.lines.length - 1, mode, advanceMode, voices: kept });
+  };
 
   return (
     <Page>

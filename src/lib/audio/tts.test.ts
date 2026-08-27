@@ -75,3 +75,58 @@ describe("assignVoices", () => {
     expect(assignVoices([])).toEqual({});
   });
 });
+
+describe("assignVoices — 성별에 맞춰 고른다", () => {
+  const preset = (m: Record<string, { preset: string }>, role: string) => m[role].preset;
+
+  it("여성 배역에는 여성 목소리를 준다", () => {
+    const got = assignVoices(["엄마", "할머니", "딸"]);
+    for (const r of ["엄마", "할머니", "딸"]) {
+      expect(preset(got, r), r).toMatch(/^F/);
+    }
+  });
+
+  it("남성 배역에는 남성 목소리를 준다", () => {
+    const got = assignVoices(["아빠", "할아버지", "아들"]);
+    for (const r of ["아빠", "할아버지", "아들"]) {
+      expect(preset(got, r), r).toMatch(/^M/);
+    }
+  });
+
+  it("섞여 있어도 각자 맞는 쪽을 받는다", () => {
+    const got = assignVoices(["철수", "영자", "만수", "정숙"]);
+    expect(preset(got, "철수")).toMatch(/^M/);
+    expect(preset(got, "만수")).toMatch(/^M/);
+    expect(preset(got, "영자")).toMatch(/^F/);
+    expect(preset(got, "정숙")).toMatch(/^F/);
+  });
+
+  it("같은 성별끼리는 서로 다른 목소리를 받는다", () => {
+    const got = assignVoices(["엄마", "할머니", "딸", "언니"]);
+    const presets = Object.values(got).map((x) => x.preset);
+    expect(new Set(presets).size).toBe(4);
+  });
+
+  it("성별을 모르는 배역도 목소리를 받는다", () => {
+    const got = assignVoices(["선생", "사장", "학생"]);
+    expect(Object.keys(got)).toHaveLength(3);
+    expect(Object.values(got).every((x) => /^[FM][1-5]$/.test(x.preset))).toBe(true);
+  });
+
+  it("사람이 고른 목소리가 추정보다 우선한다", () => {
+    const got = assignVoices(["엄마", "아빠"], { 엄마: "M3" });
+    expect(preset(got, "엄마")).toBe("M3");
+    expect(preset(got, "아빠")).toMatch(/^M/);
+  });
+
+  it("고른 목소리는 다른 배역이 가져가지 않는다", () => {
+    const got = assignVoices(["영자", "정숙"], { 영자: "F2" });
+    expect(preset(got, "영자")).toBe("F2");
+    expect(preset(got, "정숙")).not.toBe("F2");
+  });
+
+  it("성별을 맞춰도 결과는 늘 같다", () => {
+    const roles = ["엄마", "철수", "선생"];
+    expect(assignVoices(roles)).toEqual(assignVoices(roles));
+  });
+});

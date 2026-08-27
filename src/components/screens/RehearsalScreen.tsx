@@ -11,11 +11,13 @@ import { ReviewList } from "../ReviewList";
 import { Button, Icon, RoleName, StatusPill } from "../ui";
 import type { RunStats } from "./DoneScreen";
 
-export function useStyleFor(script: StoredScript, myRole: string) {
-  // 내 배역을 뺀 나머지에게 등장 순서대로 목소리를 준다. 같은 대본이면 늘 같은 배정이다.
+export function useStyleFor(script: StoredScript, setup: Setup) {
+  const myRole = setup.myRole;
+  // 내 배역을 뺀 나머지에게 목소리를 준다. 이름으로 성별을 짚고, 사람이 고른 것이 있으면
+  // 그쪽을 따른다. 같은 대본에 같은 선택이면 늘 같은 배정이다.
   const voices = useMemo(
-    () => assignVoices(script.roles.filter((r) => r !== myRole)),
-    [script.roles, myRole],
+    () => assignVoices(script.roles.filter((r) => r !== myRole), setup.voices),
+    [script.roles, myRole, setup.voices],
   );
   const fallback = useMemo(() => Object.values(voices)[0], [voices]);
   return (role: string) => voices[role] ?? fallback;
@@ -62,7 +64,7 @@ export function PastLine({ line, myRole }: { line: DialogueLine; myRole: string 
 }
 
 export function RehearsalScreen({ script, setup, onFinish, onExit }: { script: StoredScript; setup: Setup; onFinish: (s: RunStats) => void; onExit: () => void }) {
-  const styleFor = useStyleFor(script, setup.myRole);
+  const styleFor = useStyleFor(script, setup);
   const runner = useRehearsalRunner(
     { lines: script.lines, myRole: setup.myRole, start: setup.start, end: setup.end },
     { myTurn: setup.advanceMode, styleFor },
