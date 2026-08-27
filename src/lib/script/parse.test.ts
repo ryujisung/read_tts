@@ -286,3 +286,126 @@ describe("배역 직접 고치기", () => {
     expect(counts.get("무대")).toBe(2);
   });
 });
+
+describe("조사가 붙으면 배역이 아니라 서술이다", () => {
+  // 배우가 하는 말이 아니라 그 배역을 두고 하는 말이다.
+  const raw = [
+    "마르타 어서 오세요.",
+    "얀 방이 있습니까.",
+    "마르타는 천천히 고개를 든다.",
+    "얀 하룻밤 묵고 싶은데요.",
+    "마르타 값은 선불입니다.",
+    "얀은 가방을 내려놓는다.",
+    "마르타 이쪽으로 오세요.",
+    "얀 고맙습니다.",
+  ].join("\n");
+
+  it("이름+조사는 배역으로 세지 않는다", () => {
+    const s = parseScript(raw);
+    expect(s.roles).toEqual(["마르타", "얀"]);
+    expect(s.roles).not.toContain("마르타는");
+    expect(s.roles).not.toContain("얀은");
+  });
+
+  it("이름+조사로 시작하는 줄은 지문이 된다", () => {
+    const s = parseScript(raw);
+    const dirs = s.lines.filter((l) => l.type === "direction").map((l) => l.text);
+    expect(dirs).toContain("마르타는 천천히 고개를 든다.");
+    expect(dirs).toContain("얀은 가방을 내려놓는다.");
+  });
+
+  it("서술 줄이 앞 대사에 붙지 않는다", () => {
+    const s = parseScript(raw);
+    const d = dialogues(s.lines);
+    expect(d[0].text).toBe("어서 오세요.");
+    expect(d.every((l) => !l.text.includes("고개를 든다"))).toBe(true);
+  });
+
+  it("조사가 없으면 그대로 대사다", () => {
+    const s = parseScript(raw);
+    expect(dialogues(s.lines).map((l) => l.role)).toEqual(["마르타", "얀", "얀", "마르타", "마르타", "얀"]);
+  });
+});
+
+describe("막·장 표시는 배역이 아니다", () => {
+  it("홀로 선 1막·제2장은 지문으로 내린다", () => {
+    const s = parseScript(
+      ["1막", "마르타 어서 오세요.", "얀 방이 있습니까.", "제2장", "마르타 이쪽입니다.", "얀 고맙습니다."].join("\n"),
+    );
+    expect(s.roles).toEqual(["마르타", "얀"]);
+    const dirs = s.lines.filter((l) => l.type === "direction").map((l) => l.text);
+    expect(dirs).toContain("1막");
+    expect(dirs).toContain("제2장");
+  });
+});
+
+describe("막·장 표시가 여러 꼴로 와도 지문이다", () => {
+  // 표시 줄은 대사 뒤에 온다 — 맨 앞에 두면 기본 동작으로 지문이 되어 규칙을 확인할 수 없다.
+  const withMark = (...marks: string[]) =>
+    parseScript(["마르타 어서 오세요.", "얀 방이 있습니까.", ...marks, "마르타 이쪽입니다.", "얀 고맙습니다."].join("\n"));
+
+  it("막 뒤에 장이 또 붙는 꼴", () => {
+    const s = withMark("1막 1장");
+    expect(s.roles).toEqual(["마르타", "얀"]);
+    expect(s.lines.filter((l) => l.type === "direction").map((l) => l.text)).toContain("1막 1장");
+  });
+
+  it("줄표로 소제목이 붙는 꼴", () => {
+    for (const m of ["2막 3장 - 어느 여름날", "2막 1장- 붙여 쓴 줄표", "1장 – 긴 줄표"]) {
+      const s = withMark(m);
+      expect(s.lines.filter((l) => l.type === "direction").map((l) => l.text), m).toContain(m);
+      expect(s.roles, m).toEqual(["마르타", "얀"]);
+    }
+  });
+
+  it("'1막 끝' 꼴", () => {
+    const s = withMark("1막 끝");
+    expect(s.lines.filter((l) => l.type === "direction").map((l) => l.text)).toContain("1막 끝");
+  });
+
+  it("세는 단위로 쓴 말은 건드리지 않는다", () => {
+    // '장'·'부'는 종이나 서류를 세는 말이기도 하다. 구분자 없이 말이 이어지면 표시가 아니다.
+    const s = parseScript(["마르타 어서 오세요.", "얀 2장 주세요.", "마르타 여기요.", "얀 고맙습니다."].join("\n"));
+    const d = dialogues(s.lines);
+    expect(d.some((l) => l.text === "2장 주세요.")).toBe(true);
+  });
+});
+
+describe("공백 형식에서 두 어절 배역 이름", () => {
+  /** `8번 배심원 …` 이 열두 줄, `배심원장 …` 이 열두 줄. 뒷말은 제각각으로 둔다. */
+  const raw = (() => {
+    const out: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      out.push(`8번 배심원 그건 말이 안 됩니다 ${i}.`);
+      out.push(`3번 배심원 무슨 소리요 ${i}.`);
+      out.push(`배심원장 다시 ${i} 세어 봅시다.`);
+      out.push(`배심원장 조용히 ${i} 해 주세요.`);
+    }
+    return out.join("\n");
+  })();
+
+  it("뒷말이 한결같으면 두 어절을 한 배역으로 묶는다", () => {
+    const s = parseScript(raw);
+    expect(s.roles).toContain("8번 배심원");
+    expect(s.roles).toContain("3번 배심원");
+    expect(s.roles).not.toContain("8번");
+    expect(s.roles).not.toContain("3번");
+  });
+
+  it("묶인 배역의 대사에서 이름이 빠진다", () => {
+    const d = dialogues(parseScript(raw).lines);
+    const first = d.find((l) => l.role === "8번 배심원");
+    expect(first?.text).toBe("그건 말이 안 됩니다 0.");
+  });
+
+  it("뒷말이 제각각인 배역은 그대로 한 어절이다", () => {
+    const s = parseScript(raw);
+    expect(s.roles).toContain("배심원장");
+  });
+
+  it("몇 줄 안 되면 묶지 않는다", () => {
+    // 우연히 같은 말로 시작한 것과 진짜 두 어절 이름을 가르려면 표본이 있어야 한다.
+    const few = ["철수 안녕 반가워.", "철수 안녕 잘 가.", "영희 그래 응.", "영희 그래 또 봐."].join("\n");
+    expect(parseScript(few).roles).toEqual(["철수", "영희"]);
+  });
+});
