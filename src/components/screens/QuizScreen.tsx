@@ -18,7 +18,7 @@ const MAX_MISS = 2; // 같은 줄 2회 미달이면 안내 없이 통과 — 특
 type Judge = { kind: "pass" } | { kind: "retry"; said: string } | null;
 
 export function QuizScreen({ script, setup, onFinish, onExit }: { script: StoredScript; setup: Setup; onFinish: (s: RunStats) => void; onExit: () => void }) {
-  const styleFor = useStyleFor(script, setup.myRole);
+  const styleFor = useStyleFor(script, setup);
   const runner = useRehearsalRunner({ lines: script.lines, myRole: setup.myRole, start: setup.start, end: setup.end }, { myTurn: "wait", styleFor });
   const { state } = runner;
   const w = rehearsalWindow(state);

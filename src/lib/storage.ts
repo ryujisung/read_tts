@@ -2,6 +2,7 @@
  * 대본과 설정은 sessionStorage까지만 간다. 사용자가 넣는 대본은 대부분 타인의 저작물이라
  * 서버에 올리지 않고, 탭을 닫으면 사라지게 둔다.
  */
+import type { VoiceChoices } from "./audio/tts";
 import type { ScriptLine } from "./script/parse";
 
 export interface StoredScript {
@@ -20,6 +21,12 @@ export interface Setup {
   end: number;
   mode: Mode;
   advanceMode: AdvanceMode;
+  /**
+   * 사람이 직접 고른 목소리. 배역 이름 → 프리셋.
+   * 이름으로 성별을 짚는 것은 반드시 틀리는 이름이 나오므로 고칠 자리를 둔다.
+   * 비워 두면 전부 추정에 맡긴다.
+   */
+  voices?: VoiceChoices;
 }
 
 const SCRIPT_KEY = "rehearsal.script";

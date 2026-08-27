@@ -7,6 +7,7 @@
  * 둘 다 대본을 밖으로 보내지 않는다 — 단, 기기에 원격 음성밖에 없으면
  * speechSynthesis 는 텍스트를 브라우저 음성 서비스로 넘긴다. `isRemoteOnly()` 로 알린다.
  */
+import { guessGender } from "../script/gender";
 import { speakableText } from "../script/parse";
 import { synthesize, load as loadSupertonic } from "./supertonic/engine";
 import { playSynthesized, unlockAudio } from "./supertonic/play";
@@ -40,21 +41,66 @@ const DEVICE_STYLES: VoiceStyle[] = [
   { rate: 1.02, pitch: 0.95 },
 ];
 
-/** 남녀가 번갈아 나오도록 섞어 둔다 — 등장 순서대로 집으면 대개 대화처럼 들린다. */
-const PRESET_ORDER: VoicePreset[] = ["F1", "M1", "F2", "M2", "F3", "M3", "F4", "M4", "F5", "M5"];
+const FEMALE_PRESETS: VoicePreset[] = ["F1", "F2", "F3", "F4", "F5"];
+const MALE_PRESETS: VoicePreset[] = ["M1", "M2", "M3", "M4", "M5"];
+
+/** 사람이 직접 고른 목소리. 배역 이름 → 프리셋. */
+export type VoiceChoices = Partial<Record<string, VoicePreset>>;
+
+/**
+ * 사람이 이미 가져간 것은 건너뛰고 다음 목소리를 집는다.
+ * 다 찼으면 어쩔 수 없이 겹치게 둔다 — 목소리보다 배역이 많은 대본이 있다.
+ */
+function pick(pool: VoicePreset[], cursor: { i: number }, taken: Set<VoicePreset>): VoicePreset {
+  for (let n = 0; n < pool.length; n++) {
+    const p = pool[(cursor.i + n) % pool.length];
+    if (!taken.has(p)) {
+      cursor.i = (cursor.i + n + 1) % pool.length;
+      return p;
+    }
+  }
+  const p = pool[cursor.i % pool.length];
+  cursor.i = (cursor.i + 1) % pool.length;
+  return p;
+}
 
 /**
  * 배역 목록을 받아 배역마다 목소리를 정한다.
- * 순서만 보고 정하므로, 같은 대본이면 다시 들어와도 같은 목소리가 나온다.
+ *
+ * 배역 이름에서 성별을 짚어 그쪽 목소리를 준다 — 전에는 등장 순서대로만 찍어서
+ * '엄마'가 남자 목소리로 나왔다. 성별을 모르는 배역은 남녀를 번갈아 준다.
+ * 추정은 반드시 틀리는 이름이 나오므로 `choices` 로 사람이 덮어쓸 수 있다.
+ *
+ * 순서와 이름만 보고 정하므로, 같은 대본이면 다시 들어와도 같은 목소리가 나온다.
  */
-export function assignVoices(roles: string[]): Record<string, RoleVoice> {
+export function assignVoices(roles: string[], choices: VoiceChoices = {}): Record<string, RoleVoice> {
   const out: Record<string, RoleVoice> = {};
+
+  // 사람이 고른 것을 먼저 확보한다. 추정이 그 자리를 가져가면 고른 의미가 없다.
+  const taken = new Set<VoicePreset>();
+  for (const role of roles) {
+    const chosen = choices[role];
+    if (chosen) taken.add(chosen);
+  }
+
+  const female = { i: 0 };
+  const male = { i: 0 };
+  let unknownCount = 0;
+
   roles.forEach((role, i) => {
-    out[role] = {
-      device: DEVICE_STYLES[i % DEVICE_STYLES.length],
-      preset: PRESET_ORDER[i % PRESET_ORDER.length],
-    };
+    const chosen = choices[role];
+    let preset: VoicePreset;
+    if (chosen) {
+      preset = chosen;
+    } else {
+      const g = guessGender(role);
+      // 모르면 번갈아 준다 — 대개 대화처럼 들린다.
+      const useFemale = g === "female" || (g === "unknown" && unknownCount++ % 2 === 0);
+      preset = useFemale ? pick(FEMALE_PRESETS, female, taken) : pick(MALE_PRESETS, male, taken);
+    }
+    out[role] = { device: DEVICE_STYLES[i % DEVICE_STYLES.length], preset };
   });
+
   return out;
 }
 
